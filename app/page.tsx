@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { auth, signIn, signOut } from '@/lib/auth'
 
 export default async function Home() {
@@ -13,7 +14,7 @@ export default async function Home() {
           <form action={async () => { 'use server'; await signOut() }}>
             <button className="px-3 py-2 rounded bg-gray-200">Cerrar sesión</button>
           </form>
-          <a className="underline" href="/lessons">Ir a Lessons (protegido)</a>
+          <Link className="underline" href="/lessons">Ir a Lessons (protegido)</Link>
         </>
       ) : (
         <form action={async () => { 'use server'; await signIn('google') }}>

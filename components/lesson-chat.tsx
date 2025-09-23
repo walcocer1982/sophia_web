@@ -1,16 +1,18 @@
 "use client"
 
 import { ChatContainer } from "@/components/chat-container"
-import { ChatPrompt } from "@/components/chat-prompt"
 import { getChats } from "@/app/actions/lessons"
+import ChatPrompt from "@/components/chat-prompt"
 import { useEffect, useState } from "react"
 import type { ChatMessage as ChatMessageType } from "@/app/actions/lessons"
+import type { Session } from "next-auth"
 
 interface LessonChatProps {
   lessonId: string
+  session: Session | null
 }
 
-export function LessonChat({ lessonId }: LessonChatProps) {
+export function LessonChat({ lessonId, session }: LessonChatProps) {
   const [messages, setMessages] = useState<ChatMessageType[]>([])
   const [loading, setLoading] = useState(true)
   const [isThinking, setIsThinking] = useState(false)
@@ -53,9 +55,9 @@ export function LessonChat({ lessonId }: LessonChatProps) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 p-6 overflow-y-auto">
-        <ChatContainer messages={messages} loading={loading} isThinking={isThinking} isTyping={isTyping} />
+        <ChatContainer messages={messages} loading={loading} isThinking={isThinking} isTyping={isTyping} session={session} />
       </div>
-      <div className="border-t p-4">
+      <div className="border-t p-4 flex justify-center">
         <ChatPrompt disabled={isBlocked} onSend={simulateSophiaResponse} />
       </div>
     </div>

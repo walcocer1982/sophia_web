@@ -33,7 +33,7 @@ export async function getChats(): Promise<ChatMessage[]> {
       time: "11:09 AM",
       isUser: false,
       username: "Sophia",
-      image: "/safety-hazard-workplace-scene.jpg",
+      image: "https://placehold.co/600x400",
     },
     {
       id: "4",

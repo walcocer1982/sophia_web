@@ -158,3 +158,175 @@ export async function signOutAction() {
 1. **"headers was called outside a request scope":** No llamar funciones de servidor directamente en client components
 2. **Sesión no se cierra:** Usar `revalidatePath()` para limpiar caché después del logout
 3. **Tipos any en callbacks:** Extender interfaces de NextAuth en `types/next-auth.d.ts`
+4. **Edge Function size exceeded (Vercel):** Crear configuración separada sin PrismaAdapter para middleware
+
+### Componentes de Chat y UX
+
+#### Header Component con Sesión
+- Recibe `session` como prop desde Server Components
+- Muestra imagen real del usuario de Google con fallback a iniciales
+- Estilos consistentes con gradientes cyan-yellow del proyecto
+- Botón logout funcional con Server Actions
+
+#### ChatMessage con Avatar Personalizado
+- Props: `userAvatar` (imagen de Google) y `userInitials` (calculadas automáticamente)
+- Usa `AvatarImage` para fotos reales, `AvatarFallback` para iniciales
+- Colores: Usuario (yellow-300), Sophia (cyan-800/70)
+- Ring y gradientes consistentes con el diseño global
+
+#### AIChatPrompt (reemplazo de ChatPrompt)
+- Props: `disabled` y `onSend` para integración completa
+- Auto-resize textarea con altura mínima 72px, máxima 300px
+- Envío con Enter (sin Shift), botón con gradiente del proyecto
+- Estados visuales claros para disabled/enabled
+- Placeholder dinámico según estado
+
+#### Flujo de Datos de Sesión
+```typescript
+// Server Component → Client Component
+async function Page() {
+  const session = await auth()
+  return <Header session={session} />
+}
+
+// Propagación en componentes de chat
+<LessonChat session={session} />
+  → <ChatContainer session={session} />
+    → <ChatMessage userAvatar={session?.user?.image} userInitials={...} />
+```
+
+### Middleware Optimizado para Edge Runtime
+
+Para evitar el error "Edge Function size exceeded" en Vercel:
+
+1. **Separar configuraciones de auth:**
+   - `lib/auth.ts`: Configuración completa con PrismaAdapter para server-side
+   - `lib/auth-edge.ts`: Configuración ligera sin adapter para middleware
+
+2. **Estructura del middleware optimizado:**
+```typescript
+// middleware.ts - Tamaño reducido: ~90KB (antes >1MB)
+import { authEdge } from '@/lib/auth-edge'
+
+export default authEdge((req) => {
+  // Lógica de protección de rutas
+})
+```
+
+3. **Importante:**
+   - NO importar Prisma ni PrismaAdapter en el middleware
+   - NO exportar directamente `auth` desde lib/auth en middleware
+   - Usar configuración mínima solo con providers necesarios
+
+## 🚀 Protocolo de Release
+
+### Checklist Pre-Release
+
+Antes de crear un nuevo release, ejecutar estos pasos en orden:
+
+#### 1. 🧹 Limpieza de Código
+```bash
+# Buscar y eliminar console.logs
+grep -r "console\." --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" app/ components/ lib/
+
+# Buscar comentarios TODO/FIXME
+grep -r "TODO\|FIXME" --include="*.ts" --include="*.tsx" app/ components/ lib/
+
+# Buscar código comentado (líneas que empiezan con //)
+grep -r "^[[:space:]]*//" --include="*.ts" --include="*.tsx" app/ components/ lib/
+```
+
+#### 2. 🔍 Verificación de Calidad
+```bash
+# Ejecutar linter
+npm run lint
+
+# Verificar tipos TypeScript
+npx tsc --noEmit
+
+# Ejecutar build de producción
+npm run build
+```
+
+#### 3. 📝 Actualización de Documentación
+
+**CLAUDE.md:**
+- [ ] Agregar nuevos patrones aprendidos
+- [ ] Actualizar comandos si cambiaron
+- [ ] Documentar nuevas convenciones de código
+- [ ] Agregar soluciones a problemas encontrados
+
+**package.json:**
+- [ ] Incrementar versión siguiendo semver:
+  - `MAJOR.MINOR.PATCH`
+  - PATCH: bug fixes (1.0.0 → 1.0.1)
+  - MINOR: nuevas features (1.0.0 → 1.1.0)
+  - MAJOR: cambios breaking (1.0.0 → 2.0.0)
+
+**README.md:**
+- [ ] Actualizar Changelog con formato:
+  ```markdown
+  ### Versión X.X.X (YYYY-MM-DD)
+  - **Feature:** Descripción de nueva funcionalidad
+  - **Fix:** Descripción del bug corregido
+  - **Mejora:** Optimización o mejora implementada
+  - **Breaking:** Cambios que rompen compatibilidad (si aplica)
+  ```
+
+#### 4. ✅ Verificación Final
+```bash
+# Test del servidor de desarrollo
+npm run dev
+# Verificar que la aplicación carga correctamente
+# Probar login/logout
+# Navegar por las rutas principales
+
+# Build final
+npm run build
+```
+
+#### 5. 📦 Commit y Tag
+
+```bash
+# Agregar todos los cambios
+git add -A
+
+# Commit con mensaje descriptivo
+git commit -m "feat: vX.X.X - [Descripción breve]
+
+- [Detalle de cambios principales]
+- [Fixes importantes]
+- [Nuevas features]
+
+🤖 Generated with Claude Code (https://claude.ai/code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+
+```
+
+### 📋 Template de Release Notes
+
+```markdown
+## v[X.X.X] - [Título descriptivo]
+
+### 🎯 Highlights
+- Principal mejora o feature
+
+### ✨ Features
+- Nueva funcionalidad 1
+- Nueva funcionalidad 2
+
+### 🐛 Bug Fixes
+- Fix 1
+- Fix 2
+
+### 🔧 Mejoras
+- Optimización 1
+- Refactor 2
+
+### 📚 Documentación
+- Actualización de docs
+
+### ⚠️ Breaking Changes (si aplica)
+- Cambio que requiere migración
+```

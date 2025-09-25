@@ -1,6 +1,6 @@
 {
   "name": "sophia_web",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack -p 3001",
@@ -23,6 +23,7 @@
     "motion": "^12.23.19",
     "next": "15.5.4",
     "next-auth": "^5.0.0-beta.29",
+    "openai": "^5.23.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "tailwind-merge": "^3.3.1",

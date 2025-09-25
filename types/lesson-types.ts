@@ -1,0 +1,29 @@
+export interface LessonImage {
+  id: number;
+  description: string;
+  url: string;
+  mustUse?: boolean; // si true, el modelo debe referenciarla/usar la info
+}
+
+export interface LessonMoment {
+  id: number; // entero (0,1,2,...)
+  title: string;
+  goal: string; // 1 línea, resultado esperado
+  referenceQuestions: string[]; // ideas de preguntas; el server elige 1 por turno
+  images?: LessonImage[];       // opcional
+  rubric?: {
+    correct: string[];
+    partial?: string[];
+    incorrect?: string[];
+  }; // opcional, útil para feedback
+}
+
+export interface LessonStructure {
+  id: number;
+  title: string;                // visible en UI (tarjeta, detalles de la clase)
+  description: string;          // visible en UI (tarjeta, detalles de la clase)
+  language: "es"|"en";
+  learningObjectives: string[];   // visible en UI (detalles de la clase)
+  checkPoints: string[];          // SOLO para IA (no mostrar al estudiante)
+  moments: LessonMoment[];        // lineal, moment.id = number
+}

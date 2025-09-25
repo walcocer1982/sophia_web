@@ -43,6 +43,7 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+
 :root {
   --radius: 0.625rem;
   --background: oklch(1 0 0);
@@ -76,6 +77,29 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* Design System Tokens - Solo variables, no clases */
+  /* Colores educativos */
+  --ds-success: oklch(0.7 0.15 150);
+  --ds-warning: oklch(0.8 0.12 85);
+  --ds-danger: oklch(0.65 0.18 25);
+  --ds-info: oklch(0.6 0.15 220);
+  --ds-learning: oklch(0.75 0.12 280);
+  --ds-mastery: oklch(0.72 0.15 160);
+  --ds-progress: oklch(0.68 0.14 200);
+  --ds-encouraging: oklch(0.8 0.08 60);
+
+  /* Paleta Alternativa basada en Amarillo #f4cf07 y Azul #163c5b */
+  --ds-alt-primary-yellow: oklch(0.82 0.12 100);     /* Base: #f4cf07 optimizado */
+  --ds-alt-primary-blue: oklch(0.25 0.08 240);       /* Base: #163c5b optimizado */
+  --ds-alt-success: oklch(0.75 0.12 140);            /* Verde armonioso */
+  --ds-alt-warning: oklch(0.78 0.15 80);             /* Naranja complementario */
+  --ds-alt-danger: oklch(0.65 0.18 25);              /* Rojo balanceado */
+  --ds-alt-info: oklch(0.55 0.10 220);               /* Azul información */
+  --ds-alt-learning: oklch(0.7 0.08 280);            /* Púrpura suave */
+  --ds-alt-mastery: oklch(0.72 0.15 160);            /* Verde esmeralda */
+  --ds-alt-progress: oklch(0.6 0.12 200);            /* Azul progreso */
+  --ds-alt-encouraging: oklch(0.8 0.1 65);           /* Amarillo motivacional */
 }
 
 .dark {
@@ -118,5 +142,82 @@
   }
   body {
     @apply bg-background text-foreground;
+    /* Better font rendering for educational content */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* Optimize for number display in math content */
+    font-feature-settings: 'tnum' 1, 'kern' 1;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Educational typography improvements */
+  h1, h2, h3, h4, h5, h6 {
+    font-feature-settings: 'kern' 1, 'liga' 1;
+    text-wrap: balance;
+  }
+
+  /* Better readability for educational content */
+  p {
+    text-wrap: pretty;
+  }
+
+  /* Math content optimization */
+  .math-content {
+    font-feature-settings: 'tnum' 1, 'kern' 1, 'frac' 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Accessibility: Respect reduced motion preferences */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+
+    /* Keep essential animations but reduce them */
+    .animate-spin {
+      animation-duration: 2s !important;
+    }
+
+    .animate-pulse {
+      animation: none !important;
+      opacity: 1 !important;
+    }
+
+    .animate-bounce {
+      animation: none !important;
+      transform: none !important;
+    }
+  }
+
+  /* Educational micro-interactions */
+  .celebration-sparkle {
+    animation: sparkle 0.6s ease-out forwards;
+  }
+
+  @keyframes sparkle {
+    0% { opacity: 0; transform: scale(0) rotate(0deg); }
+    50% { opacity: 1; transform: scale(1.2) rotate(180deg); }
+    100% { opacity: 0; transform: scale(0.8) rotate(360deg); }
+  }
+
+  /* Gentle animations for educational content */
+  .gentle-hover {
+    transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .gentle-hover:hover {
+    transform: translateY(-2px);
+  }
+
+  /* Respecting reduced motion for gentle interactions */
+  @media (prefers-reduced-motion: reduce) {
+    .gentle-hover:hover {
+      transform: none;
+    }
   }
 }
+

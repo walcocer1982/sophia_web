@@ -9,8 +9,9 @@ Sophia Web es una plataforma educativa interactiva basada en Next.js 15.5 con Ap
 ## Tech Stack
 
 - **Framework:** Next.js 15.5 (App Router) con Turbopack
+- **Runtime:** Edge Runtime (Vercel) - Optimizado para performance
 - **Database:** PostgreSQL (Neon) + Prisma ORM
-- **Authentication:** NextAuth.js v5 con Google Provider
+- **Authentication:** NextAuth.js v5 con Google Provider (JWT Strategy)
 - **UI Components:** Radix UI + shadcn/ui
 - **Styling:** Tailwind CSS v4.1
 - **TypeScript:** Strict mode enabled
@@ -76,9 +77,10 @@ components/          # Componentes UI (shadcn/ui)
 ### Flujo de Autenticación
 
 1. **NextAuth v5** configurado con Google Provider
-2. **Middleware** protege rutas `/lessons/*`
-3. **Session Strategy:** Database (usa tablas Account/Session/User de Prisma)
+2. **Middleware** protege rutas `/lessons/*` (Edge-compatible)
+3. **Session Strategy:** JWT (cookies client-side, sin tabla Session en DB)
 4. **User Roles:** STUDENT | ADMIN
+5. **Tablas usadas:** Solo Account y User (no Session)
 
 ### Modelo de Datos Principal
 
@@ -111,7 +113,8 @@ GOOGLE_CLIENT_SECRET="..."
 - **Server Actions** en `app/actions/` para mutations
 - **"use client"** solo cuando necesario (interactividad)
 - **Prisma Client** singleton en `lib/db.ts`
-- **Componentes UI** de shadcn/ui en `components/ui/`
+- **Componentes UI** en `components/`
+- **Componentes UI SHADCN** en `components/ui/`
 - **TypeScript** estricto - no usar `any` sin justificación
 
 ## Puntos Importantes de Desarrollo
@@ -195,9 +198,35 @@ async function Page() {
     → <ChatMessage userAvatar={session?.user?.image} userInitials={...} />
 ```
 
+## 🚀 Consideraciones para Edge Runtime (Vercel)
+
+### Arquitectura Optimizada para Edge
+
+Este proyecto está **optimizado para Edge Runtime de Vercel**, lo que proporciona:
+- ⚡ Menor latencia global
+- 🔒 Mayor seguridad con aislamiento de runtime
+- 💰 Menor costo de ejecución
+- 🌍 Distribución global automática
+
+### Estrategia de Autenticación JWT
+
+**Usamos JWT en lugar de database sessions porque:**
+- ✅ Compatible con Edge Runtime (sin conexiones DB en middleware)
+- ✅ Stateless - escalabilidad infinita
+- ✅ Menor latencia (no requiere consulta DB por request)
+- ✅ Ideal para aplicaciones distribuidas globalmente
+
+**Configuración actual:**
+```typescript
+session: {
+  strategy: 'jwt',  // NO cambiar a 'database'
+  maxAge: 30 * 24 * 60 * 60,
+}
+```
+
 ### Middleware Optimizado para Edge Runtime
 
-Para evitar el error "Edge Function size exceeded" en Vercel:
+Para mantener el middleware dentro del límite de tamaño de Edge Functions:
 
 1. **Separar configuraciones de auth:**
    - `lib/auth.ts`: Configuración completa con PrismaAdapter para server-side
@@ -213,10 +242,228 @@ export default authEdge((req) => {
 })
 ```
 
-3. **Importante:**
-   - NO importar Prisma ni PrismaAdapter en el middleware
-   - NO exportar directamente `auth` desde lib/auth en middleware
-   - Usar configuración mínima solo con providers necesarios
+3. **Reglas importantes para Edge Runtime:**
+   - ❌ NO importar Prisma ni PrismaAdapter en el middleware
+   - ❌ NO usar estrategia 'database' para sesiones
+   - ❌ NO exportar directamente `auth` desde lib/auth en middleware
+   - ✅ Usar configuración mínima solo con providers necesarios
+   - ✅ Mantener el middleware bajo 1MB (idealmente <100KB)
+
+### Limitaciones del Edge Runtime
+
+**No disponible en Edge Runtime:**
+- Node.js APIs (fs, path, crypto nativo)
+- Conexiones directas a base de datos (usar API routes)
+- Módulos con binarios nativos
+- Buffer global (usar Web APIs)
+
+**Alternativas Edge-compatible:**
+- `crypto` → Web Crypto API
+- `Buffer` → `TextEncoder/TextDecoder`
+- DB queries → Server Actions o API Routes (no en middleware)
+
+## 🎨 Design System - Plan de Implementación UI/UX
+
+### 📋 Plan de desarrollo para Design System moderno
+
+El plan completo de desarrollo del design system está documentado en `PLAN_UI.md` y consta de 4 hitos incrementales:
+
+#### **Hito 1: Fundaciones del Design System y tokens base**
+- Tokens de color y variables CSS custom (`lib/design/tokens.css`)
+- Sistema tipográfico mejorado con escalas semánticas
+- Espaciado y layout sistemático
+- WCAG AA compliance para accesibilidad
+
+#### **Hito 2: Componentes base y patrones de interacción**
+- Componentes de Input mejorados (labels flotantes, validación amigable)
+- Sistema de feedback educativo (ProgressRing, Toast, StatusBadge)
+- Layout components para experiencias de aprendizaje
+- Balance entre modernidad y familiaridad para estudiantes
+
+#### **Hito 3: Micro-interacciones y states de carga mejorados**
+- Animaciones educativas que celebren progreso
+- Estados específicos para SOPHIA AI thinking
+- Gestos y shortcuts discoverable
+- Performance optimizada para dispositivos educativos
+
+#### **Hito 4: Temas y personalización para engagement**
+- Sistema de temas base (dark/light/high-contrast)
+- Personalización de learning environment
+- Achievement themes con gamification sutil
+- Optimización final para hardware educativo limitado
+
+### 🎯 Estado de Implementación Design System
+
+**Objetivo:** Crear un design system moderno pero accesible que no intimide a estudiantes promedio
+
+**Progreso actual:**
+- [x] Hito 1: Completado - Tokens, tipografía y espaciado
+- [x] Hito 2: Completado - Componentes aplicados en /lessons (ProgressRing, StatusBadge, LoadingState)
+- [x] Hito 3: Completado - Micro-interacciones, SOPHIA thinking states, animaciones educativas
+- [ ] Hito 4: Pendiente - Temas y personalización
+
+**Consideraciones de diseño:**
+- Target audience: estudiantes de secundaria/preparatoria
+- Hardware objetivo: tablets educativos de gama media-baja
+- Principio: modernidad sin intimidación
+- Accesibilidad: WCAG AA compliance
+
+### 📐 Protocolo UI Minimalista - "Menos es Más"
+
+**PRINCIPIO FUNDAMENTAL:** Usar el design system de manera intencional y mínima. No por tener tokens y utilidades debemos usarlas todas.
+
+#### 🎯 **Regla de Oro: Tailwind First, Design System Second**
+
+1. **SIEMPRE usar Tailwind CSS como primera opción:**
+   ```tsx
+   // ✅ CORRECTO - Simple y directo
+   <Badge className="bg-green-100 text-green-800">Completado</Badge>
+
+   // ❌ EVITAR - Exceso de design system para casos simples
+   <Badge className="ds-bg-success-glass ds-text-success-foreground">Completado</Badge>
+   ```
+
+2. **Design System SOLO para casos especiales:**
+   - Estados educativos específicos (mastery, learning, progress)
+   - Efectos glass que necesiten contraste optimizado
+   - Tipografía jerárquica en páginas de lecciones
+   - Espaciado cuando el patrón se repite 3+ veces
+
+#### 🚦 **Matriz de Decisión UI**
+
+**¿Cuándo usar qué?**
+
+| Escenario | Usar Tailwind | Usar Design System | Ejemplo |
+|-----------|---------------|-------------------|---------|
+| Colores básicos | ✅ | ❌ | `text-gray-600`, `bg-blue-50` |
+| Estados educativos | ❌ | ✅ | `ds-text-mastery`, `ds-bg-learning-glass` |
+| Espaciado común | ✅ | ❌ | `p-4`, `mb-6`, `gap-2` |
+| Layout educativo | ❌ | ✅ | `ds-container-lg`, `ds-chat-max-width` |
+| Tipografía normal | ✅ | ❌ | `text-lg`, `font-medium` |
+| Jerarquía educativa | ❌ | ✅ | `ds-text-heading-1`, `ds-text-body-lg` |
+
+#### ⚡ **Checklist de Implementación Rápida**
+
+**Antes de usar design system, pregúntate:**
+- [ ] ¿Es esto específico del contexto educativo?
+- [ ] ¿Tailwind CSS no puede lograr lo mismo más simple?
+- [ ] ¿Se repetirá este patrón en 3+ lugares?
+- [ ] ¿Necesito contraste/accesibilidad específica?
+
+**Si 2+ respuestas son "Sí" → Usa Design System**
+**Si 0-1 respuestas son "Sí" → Usa Tailwind**
+
+#### 🎨 **Patrones de Uso Comunes**
+
+**✅ Buenos usos del Design System:**
+```tsx
+// Estados de aprendizaje
+<Badge className="ds-bg-mastery-glass">Nivel Avanzado</Badge>
+
+// Tipografía educativa
+<h1 className="ds-text-heading-1">Lección de Matemáticas</h1>
+
+// Layout de lecciones
+<div className="ds-container-lg ds-space-y-spacing-xl">
+
+// Efectos glass con contraste
+<div className="ds-bg-progress-glass ds-p-spacing-md">
+```
+
+**❌ Malos usos del Design System:**
+```tsx
+// Simple spacing - usar Tailwind
+<div className="ds-p-spacing-sm"> // ❌
+<div className="p-2">             // ✅
+
+// Colores básicos - usar Tailwind
+<span className="ds-text-info">    // ❌
+<span className="text-blue-600">   // ✅
+
+// Tipografía normal - usar Tailwind
+<p className="ds-text-body-md">     // ❌
+<p className="text-base">           // ✅
+```
+
+#### 🏗️ **Arquitectura de Componentes Eficiente**
+
+**Jerarquía de estilos:**
+1. **Tailwind** - 80% de los casos
+2. **Design System** - 15% casos educativos específicos
+3. **CSS custom** - 5% casos muy específicos
+
+**En la práctica:**
+- Componentes base: Usa Tailwind
+- Componentes educativos: Combina Tailwind + Design System mínimo
+- Páginas de lecciones: Design System más presente pero selectivo
+
+Este protocolo asegura que el design system agregue valor real sin crear complejidad innecesaria.
+
+## 🤖 Integración de IA - Plan de Implementación v1.0.3
+
+### 📋 Plan de desarrollo para SOPHIA AI
+
+El plan completo de implementación está documentado en `PLAN.md` y consta de 3 hitos incrementales:
+
+#### **Hito 1: Respuestas JSON tipadas y action mínima de SOPHIA**
+- Esquemas Zod para validación (`lib/ai/schemas.ts`)
+- System prompt pedagógico (`lib/ai/prompts.ts`)
+- Server Action con OpenAI API (`app/actions/sophia.ts`)
+- Integración en UI sin persistencia
+
+#### **Hito 2: Persistencia y reanudación (DB + outcome de IA)**
+- Modelos Prisma: `AIOutcome`, `MomentProgress`, `AIRequestLog`
+- Transacciones atómicas por turno
+- Session summary para optimización de tokens
+- Rehidratación de estado al reanudar
+
+#### **Hito 3: Estructura de lección y transición automática**
+- `LessonStructure` con momentos, goals y rúbricas
+- Lógica de transición basada en mastery
+- Guardas pedagógicas adaptativas
+- Métricas básicas de desempeño
+
+### 🎯 Estado de Implementación v1.0.3
+
+**Objetivo:** Integrar SOPHIA como tutora IA pedagógica con evaluación en tiempo real
+
+**Progreso actual:**
+- [x] Hito 1: Completado - Esquemas Zod, prompts pedagógicos, integración OpenAI API
+- [x] Hito 2: Completado - Modelos Prisma (AIOutcome, MomentProgress), transacciones atómicas, session summary
+- [ ] Hito 3: NO IMPLEMENTADO - Estructura de lección compleja y transiciones automáticas (revertido por complejidad)
+
+**Configuración requerida:**
+```env
+OPENAI_API_KEY="sk-..."  # ✅ Ya configurada
+```
+
+### 🔄 Decisión Arquitectural - Simplificación vs Complejidad
+
+**Fecha:** 2024-09-25
+**Decisión:** Revertir implementación del Hito 3 de SOPHIA AI
+**Razón:** La arquitectura compleja con LessonStructure, momentos automáticos y transition engine generaba mayor complejidad de la necesaria para v1.0.3
+
+**Estado actual mantenido:**
+- ✅ **Hito 1 + 2 activos:** OpenAI integration funcional con persistencia DB completa
+- ✅ **Estructura simple de lecciones:** `data_lessons/lesson01.ts` con formato básico
+- ✅ **Evaluación en tiempo real:** `processSophiaTurn()` con análisis AI y guardado transaccional
+- ✅ **UI optimizada:** SOPHIA thinking states, optimistic updates, diseño educativo
+- ✅ **Design System completo:** Hitos 1-3 implementados completamente
+
+**Archivos removidos en la simplificación:**
+- `lib/ai/lesson-types.ts` - Tipos complejos de estructura de lección
+- `lib/ai/transition-engine.ts` - Lógica de transiciones automáticas
+- `app/actions/sophia-turn-v2.ts` - Version avanzada con transitions
+- `app/actions/sophia-turn-mock.ts` - Version mock para testing
+
+**Beneficios de la simplificación:**
+- Codebase más mantenible y comprensible
+- Menor superficie de bugs y edge cases
+- Implementación más estable para producción
+- Easier debugging y troubleshooting
+- Mejor performance (menos lógica compleja por turno)
+
+Esta decisión mantiene toda la funcionalidad core mientras reduce la complejidad técnica innecesaria.
 
 ## 🚀 Protocolo de Release
 
@@ -297,10 +544,6 @@ git commit -m "feat: vX.X.X - [Descripción breve]
 - [Detalle de cambios principales]
 - [Fixes importantes]
 - [Nuevas features]
-
-🤖 Generated with Claude Code (https://claude.ai/code)
-
-Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ```
 

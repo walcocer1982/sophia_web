@@ -1,244 +1,176 @@
-# Plan para integrar la IA en 3 hitos incrementales
+# PLAN.md — Nuevo modelo de datos + primera conversación con Sophia (actualizado)
 
-## Hito 1: Respuestas JSON tipadas y action mínima de SOPHIA
-
-**Descripción y resultados esperados**
-Conseguir un ciclo completo **UI → `app/action/sophia.ts` → OpenAI → JSON validado → UI** sin tocar DB todavía. Verás el **mensaje de Sophia** y el objeto tipado (chat/progress/analytics) en la app.
-
-### Paso 1.1 — Esquema y tipos de salida (Zod)
-
-Crear en `lib/ai/schemas.ts`: `LessonAIResponse` (Zod) y `export type LessonAIResponseT`.
-
-*Objetivo:* Contrato de salida estable (chat/progress/analytics) validado en server.
-
-#### Instrucciones
-
-* `lib/ai/schemas.ts`: define `chat`, `progress (masteryDelta,nextStep,tags)`, `analytics (reasoningSignals,difficulty)`.
-* Exporta `LessonAIResponseT`.
-
-#### Consideraciones críticas:
-
-* Mantén el esquema pequeño; versiona con comentario `// v1`.
-* No incluyas campos que no uses en UI/DB.
-* Evita strings libres cuando puedas (usa enums en app).
-
-### Paso 1.2 — System prompt y utilidades
-
-Crear `lib/ai/prompts.ts` con el **system prompt de SOPHIA** (luego lo llenaremos) y helpers mínimos.
-
-*Objetivo:* Centralizar reglas pedagógicas y evitar duplicación.
-
-#### Instrucciones
-
-* `export const SOPHIA_SYSTEM_PROMPT = "..."` (plantilla con placeholders).
-* Helper `buildLessonSummary(session): string` (temporal, retornará un stub o estado local).
-
-#### Consideraciones críticas:
-
-* Limitar `lessonSessionSummary` a \~300–600 tokens.
-* No exponer secretos ni datos sensibles.
-
-### Paso 1.3 — Server Action única
-
-Implementar `app/action/sophia.ts` que reciba `{ systemPrompt, lessonSessionSummary, question, studentAnswer }` y devuelva `LessonAIResponseT` usando **Responses API** con `response_format: { type: "json_schema", strict: true }`.
-
-*Objetivo:* Asegurar **JSON válido** antes de llegar a la UI.
-
-#### Instrucciones
-
-* Instanciar `new OpenAI({ apiKey: process.env.OPENAI_API_KEY })` dentro del action.
-* Construir `input` con mensajes `system` + `user` (summary + QA + "solo JSON").
-* Parsear `res` → `JSON.parse` → `LessonAIResponse.parse()`.
-* Retornar el objeto tipado; manejar errores con shape estable `{ ok:false, error:"..." }` si aplica.
-
-#### Consideraciones críticas:
-
-* No habilitar streaming aún.
-* Asegurar que **nunca** retornas texto fuera de JSON.
-* Manejar timeouts (reintento único opcional).
-
-### Paso 1.4 — Conexión mínima en UI
-
-Conectar el chat/flujo (p. ej. `LessonChat`) para invocar `app/action/sophia.ts`.
-
-*Objetivo:* Ver **fin a fin** la primera respuesta de SOPHIA en la UI.
-
-#### Instrucciones
-
-* Deshabilita input durante la llamada; muestra loading.
-* Renderiza `ai.chat.message` y conserva `ai` en estado local (para debug).
-
-#### Consideraciones críticas:
-
-* Evita llamadas paralelas por sesión.
-* Maneja errores de red/validación con toasts o banner.
-
-### Protocolo de validación (Hito 1)
-
-* [x] `lib/ai/schemas.ts` exporta `LessonAIResponse` y `LessonAIResponseT`.
-* [x] `lib/ai/prompts.ts` contiene el **system prompt** y compila.
-* [x] `app/action/sophia.ts` retorna **solo** JSON válido del esquema.
-* [x] En UI se muestra el `chat.message` y no hay texto "extra" del modelo.
-* [x] Logs muestran latencia y no hay errores uncaught.
+> Supuestos confirmados:
+>
+> * Ya existe `lib/ai/system-prompt.ts` con `SOPHIA_SYSTEM_PROMPT`.
+> * Usaremos **Zod** como contrato estricto de salida (Structured Outputs) para validar la respuesta de la IA.
 
 ---
 
-## Hito 2: Persistencia y reanudación (DB + outcome de IA)
+## Hito 1 — Lección tipada, contrato Zod y wiring de contexto (sin DB)
 
 **Descripción y resultados esperados**
-Extender Prisma para registrar **AIOutcome**, **MomentProgress**, **AIRequestLog** y campos agregados en `LessonSession` (e.g. `aggregateMastery`, `sessionSummary`). Al recargar, la sesión **retoma** estado y la IA usa **memoria cacheada**.
+Dejar lista la **lección** (TS), el **contrato Zod** de salida y un **helper** que arme el contexto mínimo por turno (solo el **momento actual**), usando el `SOPHIA_SYSTEM_PROMPT`.
 
-### Paso 2.1 — Migraciones Prisma
+### Paso 1.1 — Tipos + lesson01
 
-Añadir enums y modelos propuestos; migrar DB.
+* `lib/ai/lesson-types.ts`
 
-*Objetivo:* Soporte nativo a outcomes, progreso por momento y métricas de costos/perf.
+  * `LessonStructure`, `LessonMoment`, `LessonImage` como definiste (con `learningObjectives` y `checkPoints`).
+* `data_lessons/lesson01.ts`
 
-#### Instrucciones
+  * `export const lesson01: LessonStructure` con `moments` lineales (`id: number`).
 
-* Añadir enums: `MessageRole`, `Difficulty`, `ResponseTag`, `EvaluationSource`.
-* Crear modelos: `MomentProgress`, `AIOutcome`, `AIRequestLog`.
-* Extender `LessonSession` con: `aggregateMastery`, `lastMasteryDelta`, `consecutiveCorrect`, `attemptsInCurrent`, `lastTags`, `lastDifficulty`, `nextStepHint`, `sessionSummary`.
-* Ejecutar `prisma migrate dev`.
+*Objetivo:* UI puede leer `title/description/learningObjectives` y disponer de `referenceQuestions[]` por momento.
 
-#### Consideraciones críticas:
+#### Consideraciones críticas
 
-* Backup antes de migrar en ambientes compartidos.
-* Defaults sensatos para datos existentes.
-* Índices en `[sessionId, momentId]` y fechas para consultas rápidas.
+* Mantén `checkPoints` solo para IA (no render en UI).
+* IDs de momentos **numéricos** (0..n) y estables.
 
-### Paso 2.2 — Transacción por turno
+### Paso 1.2 — Contrato Zod (salida IA)
 
-Encapsular todo el ciclo de un turno en **una transacción**.
+* `lib/ai/schemas.ts`
 
-*Objetivo:* Consistencia entre mensajes, evaluación y agregados.
+  * `export const LessonAIResponse = z.object({ chat:{ message:z.string(), hints:z.string().array().optional() }, progress:{ masteryDelta:z.number(), nextStep:z.enum(['ADVANCE','REINFORCE','RETRY','COMPLETE']), tags:z.enum(['CORRECT','PARTIAL','INCORRECT','CONCEPTUAL','COMPUTATIONAL','NEEDS_HELP']).array() }, analytics: z.object({ difficulty: z.enum(['EASY','MEDIUM','HARD']).optional(), reasoningSignals: z.array(z.string()).optional() }).optional() })`
+  * `export type LessonAIResponseT = z.infer<typeof LessonAIResponse>`.
 
-#### Instrucciones
+*Objetivo:* Contrato único y estricto para toda respuesta de IA.
 
-* Crear `ChatMessage(user)` y `StudentResponse`.
-* Invocar `app/action/sophia.ts` → obtener `ai`.
-* Crear `AIOutcome` (guardar `raw` y campos denormalizados).
-* Upsert `MomentProgress` (intentos, `masteryAvg`, `completed` si aplica).
-* Actualizar `LessonSession` (agregados + `sessionSummary`).
-* Crear `ChatMessage(assistant)` con `ai.chat.message`.
-* Registrar `AIRequestLog` (tokens/latencia/modelo si disponibles).
+#### Consideraciones críticas
 
-#### Consideraciones críticas:
+* El action **siempre** debe `parsear` contra este schema antes de tocar UI/DB.
+* Mantener el schema corto para ahorrar tokens.
 
-* Clampear mastery a \[0,1]; `consecutiveCorrect` según `tags`/score.
-* `sessionSummary` \~500 tokens con helper dedicado.
-* Manejar idempotencia si el cliente reintenta.
+### Paso 1.3 — Helper de contexto por turno
 
-### Paso 2.3 — Rehidratación en UI
+* `lib/ai/build-context.ts`
 
-Reanudar desde `currentMomentId` y mostrar historial relevante.
+  * `buildTurnPayload({ lesson, momentId, sessionSummary, questionShown, studentAnswer })` → devuelve el bloque **user** con:
 
-*Objetivo:* UX de **continuar donde quedaste** + memoria lista para IA.
+    * `lessonMeta { title, description, language }`
+    * `learningObjectives` (si son extensos, reduce a 3–5 bullets)
+    * `checkPoints` (idem, resumen breve)
+    * `moment` (solo el actual)
+    * `sessionSummary` (300–600 tokens)
+    * `CURRENT TURN` (Q + respuesta del alumno)
 
-#### Instrucciones
-
-* Server Component: cargar `LessonSession` + últimos `ChatMessage`.
-* Pasar estado inicial al cliente (momento, últimos mensajes).
-* Al llamar a IA, usar `sessionSummary` en lugar de todo el historial.
-
-#### Consideraciones críticas:
-
-* Paginación de mensajes a partir de N.
-* Autorización estricta por `userId`/`sessionId`.
-
-### Protocolo de validación (Hito 2)
-
-* [x] Migraciones aplicadas y schema Prisma actualizado.
-* [x] Turno completo persiste en **una transacción** sin inconsistencias.
-* [x] Rehidratación trae `currentMomentId` correcto y carga historial.
-* [x] `sessionSummary` se actualiza y reduce tokens en requests.
-* [x] `AIOutcome.raw` almacena el JSON íntegro y denormalizados útiles.
+*Objetivo:* Reutilizable, claro y barato en tokens.
 
 ---
 
-## Hito 3: Estructura de lección y transición automática
+## Hito 2 — Orquestación con OpenAI + validación Zod + persistencia mínima
 
 **Descripción y resultados esperados**
-Adoptar `LessonStructure` con momentos (`goal`, `rubric`, `transitions`, `aiPolicy`) y función `decideNextMoment` basada en `masteryDelta`, `tags` y criterios. La clase avanza/refuerza **automáticamente** y quedan métricas básicas operativas.
+Conectar la UI a `app/actions/sophia.ts`, llamar a OpenAI con **`response_format: json_schema (strict)`** y validar con Zod. Persistir el **turno** mínimo: `LessonSession` (si no existe), `StudentResponse`, `AIOutcome`.
 
-### Paso 3.1 — Tipos y datos de lección
+### Paso 2.1 — Server Action `app/actions/sophia.ts`
 
-Definir `lib/ai/lesson-types.ts` y migrar `lesson01` al nuevo formato.
+* **Inputs**: `{ userId, lessonId, momentId, questionShown, studentAnswer }`.
+* **Construcción**:
 
-*Objetivo:* Objetivos, rúbricas y transiciones explícitas por momento.
+  * `system`: `SOPHIA_SYSTEM_PROMPT` (import desde `lib/ai/system-prompt.ts`).
+  * `user`: `buildTurnPayload(...)`.
+  * `response_format`: `{ type: 'json_schema', strict: true, json_schema: <schema v1 equivalente a Zod> }`.
+* **Post-proceso**:
 
-#### Instrucciones
+  * `const ai = LessonAIResponse.parse(JSON.parse(modelOutput))`.
+  * Sanitiza si el modelo incluyó >1 pregunta nueva (deja 1 o reescribe el mensaje).
+  * Retorna `ai` tipado.
 
-* Crear tipos `LessonStructure`, `LessonMoment`, etc.
-* Actualizar `lesson01` con `type`, `goal`, `question`, `rubric`, `transitions`, `ai`.
-* Loader `getLesson(lessonId)` que devuelva estructura tipada.
+*Objetivo:* Respuesta **real** validada por contrato.
 
-#### Consideraciones críticas:
+#### Consideraciones críticas
 
-* IDs de momentos estables ("m1", "m2").
-* `aiPolicy` global + overrides por momento.
-* Contenido breve y accionable.
+* 1 reintento si el parseo falla (“REINTENTO: solo JSON válido del schema v1”).
+* No streaming (reduce complejidad MVP).
 
-### Paso 3.2 — Transición automática
+### Paso 2.2 — Persistencia (MVP)
 
-Implementar `decideNextMoment(m, ai)` y persistir el cambio.
+* Si no hay sesión: `LessonSession.create({ userId, lessonId, currentMomentId: 0 })`.
+* `StudentResponse.create({ sessionId, momentId, attempt, questionShown, studentAnswer })`.
+* `AIOutcome.create({ sessionId, responseId, momentId, raw: ai, aiMessage, aiHints, masteryDelta, nextStep, tags, difficulty, reasoningSignals })`.
+* Actualiza `LessonSession` (memoria y agregados):
 
-*Objetivo:* Moverse entre momentos según desempeño de forma confiable.
+  * `sessionSummary` (helper que mantenga \~500–600 tokens),
+  * `lastMasteryDelta`, `consecutiveCorrect` (según tags), `attemptsInCurrent++`, `lastTags`, `lastDifficulty`, `nextStepHint` (si viene).
 
-#### Instrucciones
+*Objetivo:* Cada turno queda cerrado y auditable (entrada/salida/JSON).
 
-* Criterios: `masteryDelta`, `tags`, `advanceCriteria` (consecutivos, min delta).
-* Bloqueo por `tags` críticos (p.ej. "conceptual") → `onStruggle`.
-* Persistir `currentMomentId`; marcar `MomentProgress.completed` según regla.
+#### Consideraciones críticas
 
-#### Consideraciones críticas:
-
-* Evitar loops de refuerzo (límite de repeticiones + salida controlada).
-* Respetar `maxNewQuestionsPerTurn = 1`.
-* Log básico para tuning (desde `AIRequestLog`).
-
-### Paso 3.3 — Guardas pedagógicas + tablero mínimo
-
-Añadir reglas pequeñas de calidad y una consulta para métricas.
-
-*Objetivo:* Estabilidad y visibilidad.
-
-#### Instrucciones
-
-* Si `aggregateMastery < 0.5` → bajar dificultad y activar pistas tiered.
-* Si `≥ 0.75` y sin `conceptual` → subir dificultad y ofrecer challenge.
-* Query rápida sobre `AIOutcome.tags/difficulty` y `AIRequestLog` para tablero básico.
-
-#### Consideraciones críticas:
-
-* No revelar soluciones completas salvo criterio de desbloqueo.
-* Rate limit simple por sesión/usuario.
-
-### Protocolo de validación (Hito 3)
-
-* [ ] `lesson01` convertido a `LessonStructure` y compila.
-* [ ] `decideNextMoment` mueve el flujo según delta/tags/criterios.
-* [ ] `currentMomentId` y `MomentProgress.completed` se actualizan correctamente.
-* [ ] Métricas básicas visibles (tags/difficulty, tokens/latencia).
-* [ ] No hay loops infinitos; existe salida de refuerzo.
+* Clamp de `aggregateMastery` ∈ \[0,1] (si lo actualizas en este hito).
+* `responseId` en `AIOutcome` 1–1 con `StudentResponse` (evita duplicados).
 
 ---
 
-## Archivos temporales para eliminar post-release
+## Hito 3 — Transición lineal + retomar clase
 
-Los siguientes archivos fueron creados para testing y validación del Hito 1. Deben ser eliminados después del release v1.0.3 una vez que la integración completa esté funcionando:
+**Descripción y resultados esperados**
+Mover el **momento** según `ai.progress.nextStep` y permitir reanudar desde el punto exacto: `currentMomentId` controlado por el backend.
 
-### Archivos de prueba a remover:
-* `app/lessons/test-ai/page.tsx` - Página de prueba del Hito 1
-* `app/lessons/test-ai/test-ai-client.tsx` - Cliente de prueba para invocar SOPHIA
-* `app/lessons/test-persistence/page.tsx` - Página de prueba del Hito 2
-* `app/lessons/test-persistence/test-persistence-client.tsx` - Cliente de prueba de persistencia
+### Paso 3.1 — Decisión de avance
 
-### Funciones legacy a limpiar:
-* `app/actions/sophia.ts` - Función `postUserInput()` marcada como legacy (líneas 8-18)
+* Reglas simples:
 
-### Notas de limpieza:
-* La función `postUserInput` debe ser removida completamente una vez que todos los componentes migren a `processSophiaTurn`
-* Los archivos de test-ai y test-persistence fueron útiles para validación pero no deben ir a producción
-* Considerar crear tests unitarios formales basados en los casos de prueba implementados
-* Variable `updatedSession` no usada en sophia-turn.ts (línea 220) puede removerse
+  * `ADVANCE` → `currentMomentId++`; agrega el anterior a `completedMoments` si no está; `attemptsInCurrent = 0`.
+  * `REINFORCE` o `RETRY` → permanece; `attemptsInCurrent++`.
+  * `COMPLETE` → si es el último momento o criterio cumplido → `isCompleted = true`.
+* Si `currentMomentId === moments.length - 1` y `ADVANCE` → `isCompleted = true`.
+
+*Objetivo:* Progressión **lineal** confiable.
+
+#### Consideraciones críticas
+
+* Evita loops: si `attemptsInCurrent > 3`, fuerza avance con nueva `referenceQuestion` o mini-explicación.
+* Marca `lastAccessedAt = now()` en cada turno.
+
+### Paso 3.2 — UI de lección y rehidratación
+
+* En `/lessons/SSO001_lesson_01`:
+
+  * Carga `LessonStructure` (TS).
+  * Lee `LessonSession` del usuario y determina `currentMomentId`.
+  * Muestra `title`, `description`, `learningObjectives`; selecciona 1 `referenceQuestion` del momento actual.
+  * Enviar al action `questionShown` exacta (persistimos la que vio).
+
+*Objetivo:* Al recargar, continuar sin pérdida (usa `sessionSummary` como memoria).
+
+#### Consideraciones críticas
+
+* No enviar toda la lección al modelo: solo el momento actual + resumen.
+* `checkPoints` **no** visibles en UI (solo IA).
+
+---
+
+## Checklists por hito
+
+**Hito 1**
+
+* [ ] `lesson01` compila; `learningObjectives` y `checkPoints` presentes.
+* [ ] `LessonAIResponse` (Zod) exportado y probado con payload ficticio.
+* [ ] `buildTurnPayload` arma el bloque **user** con solo el momento actual.
+
+**Hito 2**
+
+* [ ] `app/actions/sophia.ts` usa `response_format: json_schema (strict)` y valida con Zod.
+* [ ] Se crean `LessonSession` (si no existe), `StudentResponse`, `AIOutcome`.
+* [ ] `sessionSummary` actualizado (≤600 tokens), `last*` y contadores al día.
+* [ ] IA nunca llega a la UI sin pasar por `LessonAIResponse.parse(...)`.
+
+**Hito 3**
+
+* [ ] `currentMomentId` cambia con `nextStep`; `completedMoments` se actualiza.
+* [ ] `attemptsInCurrent` se resetea al avanzar y limita refuerzos.
+* [ ] Último momento + `ADVANCE` → `isCompleted = true`.
+* [ ] Rehidratación: la clase continúa correctamente tras recarga.
+
+---
+
+## Notas operativas
+
+* **Costos**: mete en prompt solo **momento actual** + `sessionSummary`.
+* **Trazabilidad**: `AIOutcome.raw` guarda el JSON íntegro para auditoría y evolución del esquema.
+* **Calidad**: el **Zod** es el guardián; si falla, no persistir ni mostrar nada a la UI (muestra error amable).
+
+Con esto, tu repo queda listo para una primera conversación con Sophia, con contrato de salida **blindado por Zod** y una progresión lineal **predecible**.

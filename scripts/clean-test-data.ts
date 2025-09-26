@@ -6,6 +6,7 @@
  */
 
 import { PrismaClient } from '@prisma/client'
+import * as readline from 'readline'
 
 const prisma = new PrismaClient()
 
@@ -45,18 +46,18 @@ console.log('⚠️  ADVERTENCIA: Este script eliminará todos los datos de SOPH
 console.log('   (sesiones, mensajes, respuestas, evaluaciones)')
 console.log('   NO eliminará usuarios ni cuentas\n')
 
-const readline = require('readline').createInterface({
+const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
 })
 
-readline.question('¿Estás seguro? (s/n): ', (answer: string) => {
+rl.question('¿Estás seguro? (s/n): ', (answer: string) => {
   if (answer.toLowerCase() === 's' || answer.toLowerCase() === 'si') {
     cleanTestData()
-      .then(() => readline.close())
+      .then(() => rl.close())
   } else {
     console.log('❌ Operación cancelada')
-    readline.close()
+    rl.close()
     process.exit(0)
   }
 })

@@ -81,7 +81,7 @@ export const LessonAIResponseJSONSchema = {
           maxItems: 3
         }
       },
-      required: ["message", "hints"],
+      required: ["message", "hints"],  // Con strict: true, TODOS los campos en properties deben estar en required
       additionalProperties: false
     },
     progress: {
@@ -123,11 +123,11 @@ export const LessonAIResponseJSONSchema = {
           maxItems: 5
         }
       },
-      required: ["difficulty", "confidenceScore", "reasoningSignals"],
+      required: ["difficulty", "confidenceScore", "reasoningSignals"],  // Con strict: true necesario
       additionalProperties: false
     }
   },
-  required: ["chat", "progress", "analytics"],
+  required: ["chat", "progress", "analytics"],  // Con strict: true todos deben estar
   additionalProperties: false
 } as const;
 

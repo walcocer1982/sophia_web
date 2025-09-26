@@ -5,12 +5,15 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Progress } from "@/components/ui/progress"
 import { LoadingState } from "@/components/ui/loading-state"
 import { HoverLift } from "@/components/ui/micro-interactions"
-import { ChevronDown, ChevronLeft } from "lucide-react"
+import { ChevronDown, ChevronLeft, RefreshCw } from "lucide-react"
 import Link from "next/link"
 import { Button } from "./ui/button"
+import { useEffect, useState, useCallback } from "react"
+import { getLessonDebugInfo } from "@/app/actions/debug-info"
 
 interface LessonDetailsProps {
   lesson?: {
+    id?: string
     title?: string
     description?: string
     learningObjectives?: string[]
@@ -18,18 +21,62 @@ interface LessonDetailsProps {
     maxQuestions?: number
     minMasteryToPass?: number
   }
-  debugInfo?: {
-    currentMomentId?: number
-    lastResponse?: string
-    mastery?: number
-    tags?: string[]
-    nextStep?: string
-    attempts?: number
-    sessionId?: string
-  }
+  onDebugRefresh?: () => void
 }
 
-export function LessonDetails({ lesson, debugInfo }: LessonDetailsProps) {
+export function LessonDetails({ lesson, onDebugRefresh }: LessonDetailsProps) {
+  const [debugInfo, setDebugInfo] = useState<{
+    sessionId?: string
+    currentMomentId?: number | null
+    mastery?: number | null
+    lastMasteryDelta?: number | null
+    tags?: string[]
+    nextStep?: string | null
+    updatedAt?: string
+  } | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+
+  const fetchDebugInfo = useCallback(async () => {
+    if (!lesson?.id) return
+
+    setIsLoading(true)
+    try {
+      const info = await getLessonDebugInfo(lesson.id)
+      setDebugInfo(info)
+    } catch (error) {
+      console.error('Error fetching debug info:', error)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [lesson?.id])
+
+  // Initial fetch
+  useEffect(() => {
+    fetchDebugInfo()
+  }, [fetchDebugInfo])
+
+  // Listen for external refresh signals
+  useEffect(() => {
+    if (onDebugRefresh) {
+      const refreshHandler = () => {
+        fetchDebugInfo()
+      }
+      window.addEventListener('sophia-response-complete', refreshHandler)
+      return () => {
+        window.removeEventListener('sophia-response-complete', refreshHandler)
+      }
+    }
+  }, [fetchDebugInfo, onDebugRefresh])
+
+  // Auto-refresh every 3 seconds when there's an active session
+  useEffect(() => {
+    if (debugInfo?.sessionId) {
+      const interval = setInterval(() => {
+        fetchDebugInfo()
+      }, 3000)
+      return () => clearInterval(interval)
+    }
+  }, [debugInfo?.sessionId, fetchDebugInfo])
   if (!lesson) {
     return (
       <div className="p-4">
@@ -112,34 +159,55 @@ export function LessonDetails({ lesson, debugInfo }: LessonDetailsProps) {
         <Collapsible defaultOpen>
           <CollapsibleTrigger className="flex items-center justify-between w-full p-4 text-left hover:bg-accent/50 rounded-lg border transition-all duration-200 group">
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></div>
-              <span className="ds-text-body-md font-medium">🔍 AI Debug Log</span>
+              <div className={`w-2 h-2 rounded-full ${debugInfo?.sessionId ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`}></div>
+              <span className="ds-text-body-md font-medium">🔍 AI Debug (DB Live)</span>
+              {isLoading && <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground" />}
             </div>
             <ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
           </CollapsibleTrigger>
           <CollapsibleContent className="px-4 pb-4">
             <div className="mt-3 space-y-2 bg-black/5 dark:bg-white/5 p-3 rounded-lg font-mono text-xs">
-              <div className="text-orange-600 dark:text-orange-400 font-semibold">
-                === SOPHIA AI DEBUG LOG ===
+              <div className="text-cyan-600 dark:text-cyan-400 font-semibold flex items-center gap-2">
+                === SOPHIA DB MONITOR ===
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-5 px-2 text-xs"
+                  onClick={fetchDebugInfo}
+                  disabled={isLoading}
+                >
+                  <RefreshCw className={`h-3 w-3 ${isLoading ? 'animate-spin' : ''}`} />
+                </Button>
               </div>
-              <div className="space-y-1 text-gray-700 dark:text-gray-300">
-                <div>📍 Estado: {debugInfo?.sessionId ? 'Sesión activa' : 'Esperando interacción...'}</div>
-                <div>🎯 Momento: {debugInfo?.currentMomentId !== undefined ? `M${debugInfo.currentMomentId + 1}` : 'Pendiente'}</div>
-                <div className="break-words">💭 Última: {debugInfo?.lastResponse ? debugInfo.lastResponse.substring(0, 100) + '...' : 'N/A'}</div>
-                <div>📊 Mastery: {debugInfo?.mastery !== undefined ? `${Math.round(debugInfo.mastery * 100)}%` : 'N/A'}</div>
-                <div>🏷️ Tags: {debugInfo?.tags?.join(', ') || 'N/A'}</div>
-                <div>⏭️ Next Step: {debugInfo?.nextStep || 'N/A'}</div>
-                <div>🔄 Intentos: {debugInfo?.attempts || 0}</div>
-                <div>🆔 Session: {debugInfo?.sessionId ? debugInfo.sessionId.substring(0, 8) + '...' : 'N/A'}</div>
-                <div className="mt-2 pt-2 border-t border-gray-300 dark:border-gray-700">
-                  <span className="text-yellow-600 dark:text-yellow-400">
-                    [INFO] Debug log activo para desarrollo
-                  </span>
+              {debugInfo ? (
+                <div className="space-y-1 text-gray-700 dark:text-gray-300">
+                  <div className="text-green-600 dark:text-green-400">
+                    ✅ Sesión: {debugInfo.sessionId || 'N/A'}
+                  </div>
+                  <div className="font-semibold text-blue-600 dark:text-blue-400">
+                    🎯 Momento: {debugInfo.currentMomentId !== null ? `M${debugInfo.currentMomentId}` : 'Inicio'}
+                  </div>
+                  <div className="font-semibold">
+                    📊 Mastery: {debugInfo.mastery !== null && debugInfo.mastery !== undefined ? `${Math.round(debugInfo.mastery * 100)}%` : '0%'}
+                  </div>
+                  <div className={`font-semibold ${(debugInfo.lastMasteryDelta ?? 0) > 0 ? 'text-green-600' : (debugInfo.lastMasteryDelta ?? 0) < 0 ? 'text-red-600' : 'text-gray-500'}`}>
+                    Δ Delta: {debugInfo.lastMasteryDelta !== null && debugInfo.lastMasteryDelta !== undefined ? `${debugInfo.lastMasteryDelta > 0 ? '+' : ''}${(debugInfo.lastMasteryDelta * 100).toFixed(1)}%` : 'N/A'}
+                  </div>
+                  <div className="text-purple-600 dark:text-purple-400">
+                    🏷️ Tags: {debugInfo.tags?.length ? debugInfo.tags.join(', ') : 'ninguno'}
+                  </div>
+                  <div className="font-semibold text-amber-600 dark:text-amber-400">
+                    ⏭️ Next: {debugInfo.nextStep || 'N/A'}
+                  </div>
+                  <div className="text-gray-500 text-[10px] pt-2 border-t border-gray-300 dark:border-gray-700">
+                    Actualizado: {debugInfo.updatedAt ? new Date(debugInfo.updatedAt).toLocaleTimeString('es-PE') : 'N/A'}
+                  </div>
                 </div>
-                <div className="text-gray-500 text-[10px]">
-                  Timestamp: {new Date().toLocaleTimeString('es-PE')}
+              ) : (
+                <div className="text-gray-500">
+                  Esperando primera interacción con Sophia...
                 </div>
-              </div>
+              )}
             </div>
           </CollapsibleContent>
         </Collapsible>

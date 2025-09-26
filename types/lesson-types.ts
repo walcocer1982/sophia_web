@@ -15,6 +15,13 @@ export interface LessonMoment {
     correct: string[];
     partial?: string[];
     incorrect?: string[];
+    vague?: string[];         // respuestas ambiguas que necesitan clarificación
+    commonErrors?: string[];  // errores típicos a detectar
+    hints?: {                 // pistas graduales opcionales
+      level1?: string;        // sutil
+      level2?: string;        // directo
+      level3?: string;        // explícito
+    };
   }; // opcional, útil para feedback
 }
 

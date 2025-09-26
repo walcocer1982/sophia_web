@@ -180,12 +180,14 @@ export default function LessonChat({
         setMessages(prev => [...prev, sophiaMessage])
         setSessionId(result.data.sessionId)
 
-        // Recargar estado de la sesión
+        // Recargar estado de la sesión y emitir evento para actualizar debug info
         setTimeout(async () => {
           const newState = await getSessionState(result.data!.sessionId)
           if (newState) {
             setSessionState(newState as SessionState)
           }
+          // Emitir evento para actualizar el debug panel
+          window.dispatchEvent(new CustomEvent('sophia-response-complete'))
         }, 500)
       }
 

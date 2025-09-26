@@ -54,7 +54,7 @@ export default function LessonLayoutWrapper({
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
         <HoverLift className="h-full border-r bg-muted">
-          <LessonDetails lesson={lesson} debugInfo={debugInfo} />
+          <LessonDetails lesson={{...lesson, id: lessonId}} />
         </HoverLift>
       </div>
 

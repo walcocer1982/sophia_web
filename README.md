@@ -58,6 +58,12 @@ NEXTAUTH_URL="http://localhost:3001"
 
 GOOGLE_CLIENT_ID="..."
 GOOGLE_CLIENT_SECRET="..."
+
+OPENAI_API_KEY="..."
+
+AUTH_MICROSOFT_ENTRA_ID_ID=""
+AUTH_MICROSOFT_ENTRA_ID_SECRET=""
+AUTH_MICROSOFT_ENTRA_ID_ISSUER=""
 ```
 
 - server:
@@ -67,6 +73,26 @@ npm run dev
 ```
 
 ## Changelog
+
+### Versión 2.0.1 (2025-01-26)
+**Mejoras de calidad y optimización**
+
+#### 🐛 Bug Fixes y limpieza de código
+- **Fix:** Eliminados todos los console.logs de debug en producción
+- **Fix:** Corregidos errores de TypeScript y warnings de ESLint
+- **Fix:** Eliminado archivo de test obsoleto (test-sophia-personality.ts)
+- **Mejora:** Actualizada configuración de import para compatibilidad con readline
+
+#### 🔧 Optimizaciones técnicas
+- **Mejora:** Refactorizada función `buildSessionSummary` para mejor mantenibilidad
+- **Mejora:** Simplificada la estructura de contexto para la IA
+- **Mejora:** Mejorado el sistema de rúbricas con validación más estricta
+- **Mejora:** Optimizado el manejo de tipos TypeScript en toda la aplicación
+
+#### 📚 Mejoras en contenido educativo
+- **Nueva:** Añadidas imágenes descriptivas para cada momento de la lección
+- **Mejora:** Enriquecidas las rúbricas de evaluación con más criterios específicos
+- **Mejora:** Mejorados los prompts del sistema para respuestas más pedagógicas
 
 ### Versión 2.0.0 (2025-01-25)
 **MAJOR RELEASE - Sistema de IA Pedagógica SOPHIA**

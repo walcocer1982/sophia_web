@@ -8,7 +8,8 @@ import {
   safeValidateAIResponse,
   type LessonAIResponseT
 } from '@/lib/ai/schemas';
-import { buildTurnPayload, buildSessionSummary } from '@/lib/ai/build-context';
+import { buildTurnPayload } from '@/lib/ai/build-context';
+import { buildSessionSummary } from '@/lib/ai/build-sessionSummary';
 import { SOPHIA_SYSTEM_PROMPT } from '@/lib/ai/system-prompt';
 import { getLessonById } from '@/data_lessons';
 import { analyzeStudentProfile, generatePedagogicalRecommendations, personalizeFeedback } from '@/lib/ai/pedagogical-analytics';
@@ -126,6 +127,7 @@ export async function processSophiaTurn(
     const temperature = lessonSession.aggregateMastery < 0.4 ? 0.5 :
                        lessonSession.aggregateMastery < 0.7 ? 0.6 : 0.7;
 
+
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
@@ -149,12 +151,13 @@ export async function processSophiaTurn(
       return { ok: false, error: 'Respuesta vacía de OpenAI' };
     }
 
+
     // 6. Parsear y validar respuesta
     const jsonResponse = JSON.parse(responseContent);
     const validationResult = safeValidateAIResponse(jsonResponse);
 
+
     if (!validationResult.success) {
-      console.error('[SOPHIA] Error de validación:', validationResult.error);
       return { ok: false, error: 'Respuesta de IA no válida' };
     }
 
@@ -267,15 +270,28 @@ export async function processSophiaTurn(
         ? lessonSession.consecutiveCorrect + 1
         : 0;
 
-      // Construir nuevo session summary
-      const updatedSummary = buildSessionSummary(
-        lessonSession.sessionSummary,
-        lesson.moments?.find(m => m.id === actualMomentId)?.title || 'Momento actual',
-        input.studentAnswer,
-        aiResponse.chat.message,
-        isCorrect,
-        newMastery
-      );
+      // Construir nuevo session summary con la función mejorada
+      const updatedSummary = buildSessionSummary({
+        lesson,
+        session: {
+          currentMomentId: actualMomentId,
+          aggregateMastery: newMastery,
+          attemptsInCurrent: lessonSession.attemptsInCurrent + 1,
+          consecutiveCorrect: newConsecutive,
+          lastMasteryDelta: aiResponse.progress.masteryDelta,
+          lastTags: aiResponse.progress.tags,
+          nextStepHint: lessonSession.nextStepHint
+        },
+        lastSR: {
+          question: input.questionShown,
+          studentAnswer: input.studentAnswer
+        },
+        lastAI: {
+          progress: aiResponse.progress,
+          analytics: aiResponse.analytics,
+          chat: aiResponse.chat
+        }
+      });
 
       // Lógica de transición entre momentos (Hito 3)
       let newCurrentMomentId = lessonSession.currentMomentId;

@@ -76,7 +76,7 @@ export function LessonDetails({ lesson, debugInfo }: LessonDetailsProps) {
       {/* Objectives Section */}
       <HoverLift lift="subtle">
         <Collapsible>
-          <CollapsibleTrigger className="flex items-center justify-between w-full p-4 text-left hover:bg-accent/50 rounded-lg border transition-all duration-200 group">
+          <CollapsibleTrigger className="flex items-center justify-between w-full p-4 text-left hover:bg-accent/50 rounded-lg border transition-all duration-200 group cursor-pointer">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
               <span className="ds-text-body-md font-medium">Objetivos de la clase</span>

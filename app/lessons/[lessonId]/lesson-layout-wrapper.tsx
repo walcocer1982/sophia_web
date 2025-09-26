@@ -4,7 +4,7 @@ import { useState } from "react"
 import { LessonDetails } from "@/components/lesson-details"
 import LessonChat from "./lesson-chat"
 import { HoverLift } from "@/components/ui/micro-interactions"
-import { Menu, X } from "lucide-react"
+import { ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import type { LessonStructure } from "@/types/lesson-types"
 import type { Session } from "next-auth"
@@ -54,16 +54,6 @@ export default function LessonLayoutWrapper({
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
       `}>
         <HoverLift className="h-full border-r bg-muted">
-          {/* Botón de cerrar solo en móvil */}
-          <div className="lg:hidden absolute top-4 right-4 z-50">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setSidebarOpen(false)}
-            >
-              <X className="h-5 w-5" />
-            </Button>
-          </div>
           <LessonDetails lesson={lesson} debugInfo={debugInfo} />
         </HoverLift>
       </div>
@@ -88,14 +78,16 @@ export default function LessonLayoutWrapper({
       </div>
 
       {/* Botón flotante para móvil */}
-      <Button
-        variant="default"
-        size="icon"
-        className="fixed bottom-6 left-6 z-50 lg:hidden shadow-lg"
-        onClick={() => setSidebarOpen(true)}
-      >
-        <Menu className="h-5 w-5" />
-      </Button>
+      {!sidebarOpen && (
+        <Button
+          variant="default"
+          size="icon"
+          className="fixed top-24 left-6 z-50 lg:hidden shadow-lg size-12"
+          onClick={() => setSidebarOpen(true)}
+        >
+          <ChevronRight className="h-5 w-5" />
+        </Button>
+      )}
     </>
   )
 }

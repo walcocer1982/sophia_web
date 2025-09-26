@@ -35,7 +35,7 @@ export default function ChatPrompt({ disabled = false, onSend }: AIChatPromptPro
 
     return (
         <div className="w-full">
-            <div className="bg-gray-50 rounded-2xl p-1.5 pt-4">
+            <div className="bg-gray-100 rounded-2xl p-1.5 pt-4">
                 <div className="relative">
                     <div className="relative flex flex-col">
                         <div className="overflow-y-auto" style={{ maxHeight: "400px" }}>
@@ -43,8 +43,9 @@ export default function ChatPrompt({ disabled = false, onSend }: AIChatPromptPro
                                 value={value}
                                 placeholder={disabled ? "Sophia está respondiendo..." : "Escribe tu mensaje..."}
                                 className={cn(
-                                    "w-full rounded-xl rounded-b-none px-4 py-3 bg-gray-300/5 dark:bg-white/5 border-none dark:text-white placeholder:text-gray-500 resize-none focus-visible:ring-0 focus-visible:ring-offset-0",
-                                    "text-lg",
+                                    "w-full rounded-xl rounded-b-none px-4 py-3 bg-gray-100 dark:bg-white/5 border-none dark:text-white placeholder:text-gray-500 resize-none focus-visible:ring-0 focus-visible:ring-offset-0",
+                                    "placeholder:text-lg",
+                                    "text-lg md:text-lg",
                                     "min-h-[72px]",
                                     disabled && "bg-gray-100 cursor-not-allowed"
                                 )}
@@ -58,7 +59,7 @@ export default function ChatPrompt({ disabled = false, onSend }: AIChatPromptPro
                             />
                         </div>
 
-                        <div className="h-14 bg-gray-300/5 dark:bg-white/5 rounded-b-xl flex items-center">
+                        <div className="h-14 bg-gray-100 dark:bg-white/5 rounded-b-xl flex items-center">
                             <div className="absolute left-3 right-3 bottom-3 flex items-center justify-end w-[calc(100%-24px)]">
                                 <button
                                     type="button"

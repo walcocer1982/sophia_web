@@ -14,12 +14,14 @@ Dejar lista la **lección** (TS), el **contrato Zod** de salida y un **helper** 
 
 ### Paso 1.1 — Tipos + lesson01
 
-* `lib/ai/lesson-types.ts`
+* `types/lesson-types.ts` (ya existe, verificar compatibilidad)
 
   * `LessonStructure`, `LessonMoment`, `LessonImage` como definiste (con `learningObjectives` y `checkPoints`).
-* `data_lessons/lesson01.ts`
+  * **CRÍTICO:** Asegurar que `moment.id: number` coincida con schema Prisma `momentId: Int`
+* `data_lessons/lesson01.ts` (ya existe, actualizar)
 
   * `export const lesson01: LessonStructure` con `moments` lineales (`id: number`).
+  * **COMPATIBILIDAD:** Ya implementado, solo verificar estructura
 
 *Objetivo:* UI puede leer `title/description/learningObjectives` y disponer de `referenceQuestions[]` por momento.
 
@@ -87,13 +89,15 @@ Conectar la UI a `app/actions/sophia.ts`, llamar a OpenAI con **`response_format
 
 ### Paso 2.2 — Persistencia (MVP)
 
-* Si no hay sesión: `LessonSession.create({ userId, lessonId, currentMomentId: 0 })`.
-* `StudentResponse.create({ sessionId, momentId, attempt, questionShown, studentAnswer })`.
-* `AIOutcome.create({ sessionId, responseId, momentId, raw: ai, aiMessage, aiHints, masteryDelta, nextStep, tags, difficulty, reasoningSignals })`.
-* Actualiza `LessonSession` (memoria y agregados):
+**⚠️ IMPORTANTE:** Ejecutar `prisma migrate dev` para aplicar el nuevo schema antes de implementar.
 
-  * `sessionSummary` (helper que mantenga \~500–600 tokens),
-  * `lastMasteryDelta`, `consecutiveCorrect` (según tags), `attemptsInCurrent++`, `lastTags`, `lastDifficulty`, `nextStepHint` (si viene).
+* Si no hay sesión: `LessonSession.create({ userId, lessonId, currentMomentId: 0 })`.
+* **Transacción atómica por turno:**
+  * `StudentResponse.create({ sessionId, momentId, attempt, questionShown, studentAnswer })`.
+  * `AIOutcome.create({ sessionId, responseId, momentId, raw: ai, aiMessage, aiHints, masteryDelta, nextStep, tags, difficulty, reasoningSignals })`.
+  * Actualizar `LessonSession` (memoria y agregados):
+    * `sessionSummary` (helper que mantenga \~500–600 tokens),
+    * `lastMasteryDelta`, `consecutiveCorrect` (según tags), `attemptsInCurrent++`, `lastTags`, `lastDifficulty`, `nextStepHint` (si viene).
 
 *Objetivo:* Cada turno queda cerrado y auditable (entrada/salida/JSON).
 
@@ -143,27 +147,156 @@ Mover el **momento** según `ai.progress.nextStep` y permitir reanudar desde el 
 
 ---
 
+## Hito 4 — Integración en producción /lessons/[lessonId]
+
+**Descripción y resultados esperados**
+Llevar toda la funcionalidad probada en los test pages a la ruta real de lecciones, con autenticación completa, manejo de errores robusto y UX pulida.
+
+### Paso 4.1 — Migración de componentes
+
+* Crear componente `app/lessons/[lessonId]/lesson-chat.tsx`
+  * Extraer lógica de test-hito3 en componente reutilizable
+  * Props: `lesson`, `sessionId`, `user`
+  * Manejo de estados: loading, error, success
+  * Componentes hijos: MessageList, InputArea, ProgressBar
+
+* Actualizar `app/lessons/[lessonId]/page.tsx`
+  * Server component que carga sesión de usuario autenticado
+  * Obtener o crear LessonSession real
+  * Pasar datos necesarios al LessonChat client component
+
+*Objetivo:* Experiencia de usuario completa y profesional.
+
+#### Consideraciones críticas
+
+* Verificar autenticación real (no usuario de prueba)
+* Manejar casos edge: sesión expirada, límites de API
+* Loading states mientras SOPHIA responde
+* Persistir pregunta seleccionada en DB para consistencia
+
+### Paso 4.2 — Cleanup y optimización
+
+* Eliminar páginas de prueba (test-hito1, test-hito2, test-hito3)
+* Remover lógica de usuario de prueba en server action
+* Implementar rate limiting para proteger API
+* Agregar telemetría básica (eventos de progreso)
+
+*Objetivo:* Código listo para producción sin artifacts de desarrollo.
+
+#### Consideraciones críticas
+
+* Backup de test pages antes de eliminar (por si acaso)
+* Verificar que no queden imports huérfanos
+* Actualizar CLAUDE.md con nuevas rutas
+
+---
+
+## Hito 5 — Optimización pedagógica de prompts
+
+**Descripción y resultados esperados**
+Mejorar significativamente la calidad de las respuestas de SOPHIA haciéndolas más específicas, pedagógicas y adaptadas al contexto de cada momento.
+
+### Paso 5.1 — Enriquecer contexto por momento
+
+* Actualizar `buildTurnPayload` para incluir:
+  * Rúbrica específica del momento (correct/partial/incorrect criteria)
+  * Ejemplos de respuestas esperadas (si existen)
+  * Imágenes del momento con instrucciones de referencia
+  * Historial resumido de errores comunes del estudiante
+
+* Crear `lib/ai/moment-rubrics.ts`
+  * Mapeo momento → criterios específicos de evaluación
+  * Frases de feedback contextualizadas por tipo de error
+  * Progresiones de dificultad por momento
+
+*Objetivo:* Contexto rico sin explotar límite de tokens.
+
+#### Consideraciones críticas
+
+* Mantener payload < 2000 tokens
+* Priorizar información relevante al momento actual
+* No revelar respuestas completas en el contexto
+
+### Paso 5.2 — Refinar SOPHIA_SYSTEM_PROMPT
+
+* Segmentar instrucciones por fase de aprendizaje:
+  * **Inicio** (momento 0-1): Más explicativo, establecer base
+  * **Medio** (momento 2-3): Más socrático, preguntas guiadas
+  * **Final** (momento 4+): Síntesis, conexiones avanzadas
+
+* Agregar técnicas pedagógicas específicas:
+  * **Error patterns**: Detectar y corregir conceptos erróneos comunes
+  * **Scaffolding progresivo**: Reducir ayuda gradualmente
+  * **Metacognición**: Hacer que el estudiante reflexione sobre su proceso
+
+* Mejorar manejo de casos especiales:
+  * Respuestas vagas → Pedir especificación
+  * Respuestas parciales → Reconocer lo correcto, guiar lo faltante
+  * Respuestas off-topic → Redirigir amablemente
+
+*Objetivo:* SOPHIA como tutora experta adaptativa, no solo evaluadora.
+
+#### Consideraciones críticas
+
+* Testear con respuestas reales de estudiantes
+* Mantener tono empático pero exigente
+* Evitar sobre-explicación que aburra
+
+### Paso 5.3 — Sistema de feedback diferenciado
+
+* Crear templates de respuesta por categoría:
+  * **Celebración** (CORRECT + alta confianza)
+  * **Refuerzo positivo** (CORRECT + baja confianza)
+  * **Corrección constructiva** (PARTIAL)
+  * **Reorientación** (INCORRECT)
+  * **Explicación rescue** (múltiples INCORRECT)
+
+* Implementar variabilidad en respuestas:
+  * Pool de frases iniciales por categoría
+  * Rotación para evitar repetitividad
+  * Personalización según racha/historial
+
+*Objetivo:* Feedback que motive y guíe, no solo califique.
+
+---
+
 ## Checklists por hito
 
-**Hito 1**
+**Hito 1** ✅ **[COMPLETADO]**
 
-* [ ] `lesson01` compila; `learningObjectives` y `checkPoints` presentes.
-* [ ] `LessonAIResponse` (Zod) exportado y probado con payload ficticio.
-* [ ] `buildTurnPayload` arma el bloque **user** con solo el momento actual.
+* [x] `lesson01` compila; `learningObjectives` y `checkPoints` presentes.
+* [x] `LessonAIResponse` (Zod) exportado y probado con payload ficticio.
+* [x] `buildTurnPayload` arma el bloque **user** con solo el momento actual.
 
-**Hito 2**
+**Hito 2** ✅ **[COMPLETADO]**
 
-* [ ] `app/actions/sophia.ts` usa `response_format: json_schema (strict)` y valida con Zod.
-* [ ] Se crean `LessonSession` (si no existe), `StudentResponse`, `AIOutcome`.
-* [ ] `sessionSummary` actualizado (≤600 tokens), `last*` y contadores al día.
-* [ ] IA nunca llega a la UI sin pasar por `LessonAIResponse.parse(...)`.
+* [x] `app/actions/sophia.ts` usa `response_format: json_schema (strict)` y valida con Zod.
+* [x] Se crean `LessonSession` (si no existe), `StudentResponse`, `AIOutcome`.
+* [x] `sessionSummary` actualizado (≤600 tokens), `last*` y contadores al día.
+* [x] IA nunca llega a la UI sin pasar por `LessonAIResponse.parse(...)`.
 
-**Hito 3**
+**Hito 3** ✅ **[COMPLETADO]**
 
-* [ ] `currentMomentId` cambia con `nextStep`; `completedMoments` se actualiza.
-* [ ] `attemptsInCurrent` se resetea al avanzar y limita refuerzos.
-* [ ] Último momento + `ADVANCE` → `isCompleted = true`.
-* [ ] Rehidratación: la clase continúa correctamente tras recarga.
+* [x] `currentMomentId` cambia con `nextStep`; `completedMoments` se actualiza.
+* [x] `attemptsInCurrent` se resetea al avanzar y limita refuerzos.
+* [x] Último momento + `ADVANCE` → `isCompleted = true`.
+* [x] Rehidratación: la clase continúa correctamente tras recarga.
+
+**Hito 4** ⏳ **[PENDIENTE]**
+
+* [ ] Componente LessonChat extraído y reutilizable
+* [ ] Integración completa en /lessons/[lessonId]/page.tsx
+* [ ] Autenticación real sin usuario de prueba
+* [ ] Páginas de test eliminadas
+* [ ] Rate limiting implementado
+
+**Hito 5** ⏳ **[PENDIENTE]**
+
+* [ ] Rúbricas específicas por momento implementadas
+* [ ] SOPHIA_SYSTEM_PROMPT segmentado por fase
+* [ ] Templates de feedback diferenciado
+* [ ] Variabilidad en respuestas
+* [ ] Testing con respuestas reales
 
 ---
 
@@ -174,3 +307,47 @@ Mover el **momento** según `ai.progress.nextStep` y permitir reanudar desde el 
 * **Calidad**: el **Zod** es el guardián; si falla, no persistir ni mostrar nada a la UI (muestra error amable).
 
 Con esto, tu repo queda listo para una primera conversación con Sophia, con contrato de salida **blindado por Zod** y una progresión lineal **predecible**.
+
+---
+
+## 🔄 Estado Actual (v1.0.3) vs Plan
+
+### ✅ **Ya Implementado**
+- **Design System completo** - Hitos 1-3 de PLAN_UI.md
+- **Tipos de lección** - `types/lesson-types.ts` con `LessonStructure`
+- **Datos de lección** - `data_lessons/lesson01.ts` con momentos numerados
+- **UI base** - Componentes educativos (ProgressRing, StatusBadge, SophiaThinking)
+- **Auth flow** - NextAuth v5 funcional
+- **Build infrastructure** - Next.js 15.5 + Turbopack
+
+### ⚠️ **Requiere Migración**
+- **Schema Prisma** - Nuevo modelo necesita `prisma migrate dev`
+- **Server Actions** - Actualizar de mock a OpenAI real
+- **Zod schemas** - Crear `lib/ai/schemas.ts`
+- **System prompt** - Crear `lib/ai/system-prompt.ts`
+- **Build context** - Crear `lib/ai/build-context.ts`
+
+### 📋 **Preparación Recomendada**
+
+#### Antes de Hito 1:
+```bash
+# 1. Backup de DB actual (si hay datos importantes)
+pg_dump DATABASE_URL > backup_before_ai_migration.sql
+
+# 2. Verificar que zod está en v3.x (ya hecho en v1.0.3)
+npm ls zod
+
+# 3. Preparar entorno para migraciones
+cp .env .env.backup
+```
+
+#### Secuencia de implementación sugerida:
+1. **Hito 1** → Estructura completa sin DB (testing seguro)
+2. **Migración schema** → `prisma migrate dev`
+3. **Hito 2** → Persistencia + OpenAI integration
+4. **Hito 3** → Transiciones y completion
+
+#### Riesgos identificados:
+- **Breaking changes** en tipos existentes
+- **Migration conflicts** si hay datos previos
+- **OpenAI costs** durante testing (usar límites)

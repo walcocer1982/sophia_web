@@ -1,10 +1,11 @@
 import { auth } from "@/lib/auth"
+import { redirect } from "next/navigation"
 import { Header } from "@/components/header"
-import { LessonDetails } from "@/components/lesson-details"
-import { LessonChat } from "@/components/lesson-chat"
-import { PageTransition, HoverLift } from "@/components/ui/micro-interactions"
+import LessonLayoutWrapper from "./lesson-layout-wrapper"
+import { PageTransition } from "@/components/ui/micro-interactions"
 import { getLessonById } from "@/data_lessons"
 import { notFound } from "next/navigation"
+import { prisma } from "@/lib/db"
 
 interface LessonPageProps {
   params: Promise<{
@@ -17,21 +18,59 @@ export default async function LessonPage({ params }: LessonPageProps) {
   const { lessonId } = await params
   const lesson = getLessonById(parseInt(lessonId))
 
+  // Verificar autenticación
+  if (!session?.user?.id) {
+    redirect('/login')
+  }
+
   if (!lesson) {
     notFound()
   }
+
+  // Obtener o crear sesión de lección para el usuario
+  let lessonSession = await prisma.lessonSession.findFirst({
+    where: {
+      userId: session.user.id,
+      lessonId: lessonId,
+      isCompleted: false
+    },
+    orderBy: { startedAt: 'desc' }
+  })
+
+  // Si hay sesión, obtener el estado actual
+  const sessionState = lessonSession ? {
+    currentMomentId: lessonSession.currentMomentId,
+    completedMoments: lessonSession.completedMoments,
+    aggregateMastery: lessonSession.aggregateMastery,
+    consecutiveCorrect: lessonSession.consecutiveCorrect,
+    totalAttempts: lessonSession.totalAttempts,
+    correctAnswers: lessonSession.correctAnswers,
+    isCompleted: lessonSession.isCompleted
+  } : undefined
+
+  // Debug info para el sidebar
+  const debugInfo = lessonSession && sessionState ? {
+    currentMomentId: sessionState.currentMomentId,
+    mastery: sessionState.aggregateMastery,
+    attempts: sessionState.totalAttempts,
+    sessionId: lessonSession.id,
+    nextStep: lessonSession.nextStepHint,
+    tags: lessonSession.lastTags
+  } : undefined
 
   return (
     <PageTransition>
       <div className="min-h-screen bg-background">
         <Header session={session} />
-        <div className="flex h-[calc(100vh-80px)]">
-          <HoverLift className="w-80 border-r bg-muted/30 transition-all duration-200">
-            <LessonDetails lesson={lesson} />
-          </HoverLift>
-          <div className="flex-1">
-            <LessonChat lessonId={lessonId} session={session} />
-          </div>
+        <div className="flex h-[calc(100vh-80px)] relative">
+          <LessonLayoutWrapper
+            lesson={lesson}
+            lessonId={lessonId}
+            initialSessionId={lessonSession?.id}
+            initialSessionState={sessionState}
+            userSession={session}
+            debugInfo={debugInfo}
+          />
         </div>
       </div>
     </PageTransition>

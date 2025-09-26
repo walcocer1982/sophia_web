@@ -17,7 +17,7 @@ export function ChatMessage({ message, time, isUser, image, userAvatar, userInit
     return (
       <div className="flex gap-3 max-w-2xl ml-auto animate-in slide-in-from-right-4 fade-in duration-300">
         <div className="flex-1 text-right">
-          <HoverLift lift="subtle">
+          <HoverLift lift="subtle" className="w-fit ml-auto">
             <div className="bg-gradient-to-br from-yellow-300 to-yellow-500/40 text-black rounded-lg p-3 inline-block shadow-sm hover:shadow-md transition-shadow duration-200">
               <p className="ds-text-body-sm text-left leading-relaxed">{message}</p>
               {image && (

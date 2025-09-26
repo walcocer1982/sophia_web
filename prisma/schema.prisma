@@ -7,7 +7,34 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/* =========================
+   Enums para lógica de IA
+   ========================= */
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
 
+enum ResponseTag {
+  CORRECT
+  PARTIAL
+  INCORRECT
+  CONCEPTUAL
+  COMPUTATIONAL
+  NEEDS_HELP
+}
+
+enum NextStep {
+  ADVANCE
+  REINFORCE
+  RETRY
+  COMPLETE
+}
+
+/* =========================
+   Auth (sin cambios)
+   ========================= */
 model Account {
   id                String  @id @default(cuid())
   userId            String
@@ -38,10 +65,10 @@ model User {
   name          String?
   emailVerified DateTime?
   image         String?
-  role          UserRole @default(STUDENT) // Campo de rol para autorización
+  role          UserRole  @default(STUDENT)
 
   // Relaciones
-  accounts      Account[]
+  accounts       Account[]
   lessonSessions LessonSession[]
 
   createdAt     DateTime  @default(now())
@@ -56,29 +83,44 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
+/* =========================
+   Core de lecciones/IA
+   ========================= */
 model LessonSession {
   id                String   @id @default(uuid())
 
   // Relaciones
   userId            String
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  lessonId          String   // ID de la lección (ej: "SSO001_lesson_01")
+
+  // Identificador lógico de la lección (ruta/TS)
+  lessonId          String   // ej: "SSO001_lesson_01"
 
   // Identificación de sesión
-  sessionNumber     Int      @default(1) // Permite múltiples intentos de la misma lección
+  sessionNumber     Int      @default(1) // múltiples intentos de la misma lección
 
-  // Progreso actual
-  currentMomentId   String   // ID del momento actual (ej: "m1", "m2", etc.)
-  completedMoments  String[] // Array de IDs de momentos completados
+  // Progreso actual (ahora Int)
+  currentMomentId   Int
+  completedMoments  Int[]
 
-  // Estado
+  // Estado general
   isCompleted       Boolean  @default(false)
   score             Float?   // Puntuación general 0-1
 
-  // Estadísticas de la sesión
+  // Estadísticas agregadas (históricas)
   totalAttempts     Int      @default(0)
   correctAnswers    Int      @default(0)
   hintsUsed         Int      @default(0)
+
+  // Memoria/estado para IA (MVP)
+  sessionSummary     String?      @db.Text   // memoria cacheada (300–600 tokens)
+  aggregateMastery   Float        @default(0.5) // 0..1
+  lastMasteryDelta   Float?
+  consecutiveCorrect Int          @default(0)
+  attemptsInCurrent  Int          @default(0)
+  lastTags           ResponseTag[]
+  lastDifficulty     Difficulty?
+  nextStepHint       String?
 
   // Timestamps
   startedAt         DateTime @default(now())
@@ -88,6 +130,7 @@ model LessonSession {
   // Relaciones con mensajes y respuestas
   chatMessages      ChatMessage[]
   studentResponses  StudentResponse[]
+  aiOutcomes        AIOutcome[]
 
   // Constraints - permite múltiples sesiones por usuario-lección
   @@unique([userId, lessonId, sessionNumber])
@@ -96,23 +139,29 @@ model LessonSession {
   @@index([userId, lessonId])
 }
 
-
 model ChatMessage {
   id                String        @id @default(uuid())
+
   // Relaciones
   sessionId         String
   session           LessonSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
   // Contenido del mensaje
-  role              String        // 'user' | 'assistant' | 'system'
+  role              String        // 'user' | 'assistant' | 'system' (texto libre en MVP)
   content           String        @db.Text
-  // Contexto educativo
-  momentId          String?       // En qué momento se envió
+
+  // Contexto educativo (ahora Int)
+  momentId          Int?
+
   // Orden secuencial
   sequence          Int           // 1, 2, 3... por sesión
+
   // Timestamps
   createdAt         DateTime      @default(now())
+
   // Relación con respuestas evaluadas (solo para mensajes de usuario)
   studentResponse   StudentResponse?
+
   // Garantizar orden único por sesión
   @@unique([sessionId, sequence])
   @@index([sessionId])
@@ -130,29 +179,66 @@ model StudentResponse {
   messageId         String        @unique
   message           ChatMessage   @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
-  // Contexto educativo
-  momentId          String        // ID del momento (ej: "m1", "m2")
-  question          String        // Pregunta realizada
-  studentAnswer     String        // Respuesta del estudiante
+  // Contexto educativo (ahora Int)
+  momentId          Int           // ej: 0, 1, 2...
 
-  // Evaluación
-  isCorrect         Boolean       // Si fue correcta o no
-  score             Float?        // Puntuación 0-1
+  // Turno: entrada del alumno
+  question          String        // pregunta mostrada
+  studentAnswer     String        @db.Text
 
-  // Evaluación AI
-  aiAnalysis        Json?         // Análisis completo de la AI
-  feedback          String?       // Feedback generado
-  hintsGiven        String[]      // Pistas proporcionadas
+  // Evaluación “clásica” (opcional en MVP, mantenida por compatibilidad)
+  isCorrect         Boolean
+  score             Float?        // 0-1
+  aiAnalysis        Json?         // análisis completo (si lo sigues usando)
+  feedback          String?
+  hintsGiven        String[]
 
   // Metadata
-  responseTime      Int?          // Tiempo en responder (segundos)
-  attempt           Int           @default(1) // Número de intento para esta pregunta
+  responseTime      Int?
+  attempt           Int           @default(1)
 
   // Timestamps
   answeredAt        DateTime      @default(now())
+
+  // Relación 1–1 con resultado IA del turno
+  aiOutcome         AIOutcome?
 
   // Índices para análisis
   @@index([sessionId])
   @@index([sessionId, momentId])
   @@index([answeredAt])
+}
+
+/* Resultado estructurado de IA por turno (1–1 con StudentResponse) */
+model AIOutcome {
+  id                String        @id @default(uuid())
+
+  // Relaciones
+  sessionId         String
+  session           LessonSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  responseId        String        @unique
+  response          StudentResponse @relation(fields: [responseId], references: [id], onDelete: Cascade)
+
+  // Contexto
+  momentId          Int           // momento evaluado (para consultas rápidas)
+  // Respuesta IA cruda (JSON del schema validado por Zod)
+  raw               Json
+
+  // Campos denormalizados
+  aiMessage         String        @db.Text   // chat.message
+  aiHints           String[]                  // chat.hints
+  masteryDelta      Float                      // progress.masteryDelta
+  nextStep          NextStep                   // progress.nextStep
+  tags              ResponseTag[]              // progress.tags
+  difficulty        Difficulty?                // analytics.difficulty
+  reasoningSignals  String[]                   // analytics.reasoningSignals
+
+  // Timestamps
+  createdAt         DateTime      @default(now())
+
+  // Índices
+  @@index([sessionId])
+  @@index([sessionId, momentId])
+  @@index([createdAt])
 }

@@ -102,7 +102,7 @@ const HoverLift: React.FC<HoverLiftProps> = ({
 
   return (
     <div className={cn(
-      "transition-all duration-200 ease-out",
+      "transition-all duration-200 ease-out rounded-xl",
       !disabled && liftClasses[lift],
       disabled && "opacity-60 cursor-not-allowed",
       className

@@ -428,9 +428,11 @@ El plan completo de implementación está documentado en `PLAN.md` y consta de 3
 **Objetivo:** Integrar SOPHIA como tutora IA pedagógica con evaluación en tiempo real
 
 **Progreso actual:**
-- [x] Hito 1: Completado - Esquemas Zod, prompts pedagógicos, integración OpenAI API
-- [x] Hito 2: Completado - Modelos Prisma (AIOutcome, MomentProgress), transacciones atómicas, session summary
-- [ ] Hito 3: NO IMPLEMENTADO - Estructura de lección compleja y transiciones automáticas (revertido por complejidad)
+- [ ] Hito 1: PENDIENTE - Lección tipada + contrato Zod + helper contexto (sin DB)
+- [ ] Hito 2: PENDIENTE - Orquestación OpenAI + validación Zod + persistencia mínima
+- [ ] Hito 3: PENDIENTE - Transición lineal + retomar clase desde currentMomentId
+
+**Nota:** Plan completamente rediseñado en enero 2025 para enfoque más sólido con structured outputs
 
 **Configuración requerida:**
 ```env
@@ -464,6 +466,41 @@ OPENAI_API_KEY="sk-..."  # ✅ Ya configurada
 - Mejor performance (menos lógica compleja por turno)
 
 Esta decisión mantiene toda la funcionalidad core mientras reduce la complejidad técnica innecesaria.
+
+### 🆕 **Nuevo Plan de IA (Enero 2025) - Arquitectura Estructurada**
+
+**Fecha:** 2025-01-25
+**Motivación:** Implementar IA funcional en `/lessons/1` con arquitectura sólida basada en OpenAI structured outputs y Zod validation
+
+#### **Características del Nuevo Enfoque:**
+
+**Structured Outputs + Zod:**
+- `response_format: { type: 'json_schema', strict: true }` - Garantiza JSON válido
+- Schema Zod como contrato único: `LessonAIResponse.parse(json)`
+- Eliminación de parsing unreliable y errores de formato
+
+**Persistencia Inteligente:**
+- Modelo `AIOutcome` con `raw: Json` para auditoría completa
+- `sessionSummary` cacheable (300-600 tokens) para optimización
+- Transacciones atómicas por turno (StudentResponse + AIOutcome + LessonSession)
+
+**Progresión Lineal Predecible:**
+- `currentMomentId: Int` con enum `NextStep { ADVANCE, REINFORCE, RETRY, COMPLETE }`
+- Prevención de loops infinitos con límite de intentos por momento
+- Rehidratación sin pérdida de contexto usando sessionSummary
+
+#### **Ventajas sobre Implementación Previa:**
+- **Robustez:** JSON schema validation elimina errores de parseo
+- **Performance:** Context optimization reduce costos de tokens
+- **Auditoría:** Raw JSON preservado para debugging y evolución
+- **Escalabilidad:** Estructura preparada para múltiples lecciones
+- **Mantenibilidad:** Separación clara de responsabilidades (types, schemas, context)
+
+#### **Schema Prisma Actualizado:**
+- Enums: `Difficulty`, `ResponseTag`, `NextStep`
+- Modelos: `LessonSession`, `ChatMessage`, `StudentResponse`, `AIOutcome`
+- Campos IA: `sessionSummary`, `aggregateMastery`, `lastMasteryDelta`, etc.
+- Índices optimizados para consultas de progreso y análisis
 
 ## 🚀 Protocolo de Release
 

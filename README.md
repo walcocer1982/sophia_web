@@ -68,6 +68,41 @@ npm run dev
 
 ## Changelog
 
+### Versión 2.0.0 (2025-01-25)
+**MAJOR RELEASE - Sistema de IA Pedagógica SOPHIA**
+
+#### 🤖 Integración completa con OpenAI
+- **Nueva:** Tutora virtual SOPHIA con evaluación en tiempo real usando GPT-4o-mini
+- **Nueva:** Sistema de respuestas estructuradas con JSON Schema para consistencia
+- **Nueva:** Evaluación pedagógica basada en rúbricas por momento de aprendizaje
+
+#### 📚 Sistema pedagógico avanzado
+- **Nueva:** Rúbricas de evaluación detalladas por cada momento de la lección
+- **Nueva:** Sistema de hints graduales de 3 niveles (sutil, directo, explícito)
+- **Nueva:** Feedback diferenciado según desempeño del estudiante
+- **Nueva:** Análisis de perfil del estudiante basado en historial
+- **Nueva:** Temperatura adaptativa de IA según nivel de dominio
+
+#### 💾 Persistencia y tracking completo
+- **Nueva:** Modelos de base de datos para AIOutcome y MomentProgress
+- **Nueva:** Transacciones atómicas para garantizar consistencia de datos
+- **Nueva:** Session summary con optimización de tokens
+- **Nueva:** Sistema de transición automática entre momentos de aprendizaje
+
+#### 🎨 Mejoras de UI/UX
+- **Nueva:** Sidebar responsive con ocultación automática en móvil
+- **Nueva:** Botón flotante para mostrar/ocultar sidebar en dispositivos móviles
+- **Nueva:** Debug log de IA para monitoreo en producción
+- **Fix:** Eliminada duplicación de componentes de "Sophia pensando"
+- **Fix:** Restaurada foto del usuario en mensajes del chat
+
+#### 🛠️ Mejoras técnicas
+- **Nueva:** Arquitectura de prompts con contexto enriquecido
+- **Nueva:** Sistema de analytics pedagógicos
+- **Mejora:** Limpieza de console.logs para producción
+- **Mejora:** Scripts de limpieza de datos de prueba
+- **Docs:** Plan completo de implementación en PLAN.md
+
 ### Versión 1.0.2 (2025-01-23)
 - **Feature:** Header personalizado con imagen de usuario de Google y datos de sesión reales
 - **Feature:** ChatMessage con avatares personalizados del usuario autenticado

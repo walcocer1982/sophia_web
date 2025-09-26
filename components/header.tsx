@@ -31,7 +31,7 @@ export function Header({ session }: HeaderProps) {
             </div>
 
             <div className="flex items-center gap-4">
-                <div className="text-right">
+                <div className="text-right hidden md:block">
                     <div className="font-semibold text-gray-900">
                         {session?.user?.name || 'Usuario'}
                     </div>

@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { ChatContainer } from "@/components/chat-container"
 import ChatPrompt from "@/components/chat-prompt"
-import { processSophiaTurn, getSessionMessages, getSessionState } from "@/app/actions/sophia"
+import { processSophiaTurn, getSessionMessages, getSessionState, initSophiaSession } from "@/app/actions/sophia"
 import type { ChatMessage as ChatMessageType } from "@/app/actions/lessons"
 import type { LessonStructure } from "@/types/lesson-types"
 import type { Session } from "next-auth"
@@ -56,26 +56,56 @@ export default function LessonChat({
     }
   }, [currentMomentId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Cargar mensajes si hay sesión existente
+  // Cargar mensajes si hay sesión existente o iniciar nueva
   useEffect(() => {
     if (sessionId) {
       loadSession()
-    } else if (currentQuestion && messages.length === 0) {
-      // Agregar pregunta inicial de SOPHIA como mensaje visual
-      // NOTA: Esta primera pregunta se guardará en DB cuando el usuario responda por primera vez
-      const initialMessage: ChatMessageType = {
-        id: `sophia-init`,
-        message: currentQuestion,
-        time: new Date().toLocaleTimeString('es-PE', {
-          hour: '2-digit',
-          minute: '2-digit'
-        }),
-        isUser: false,
-        username: 'SOPHIA'
-      }
-      setMessages([initialMessage])
+    } else if (!sessionId && messages.length === 0) {
+      // Iniciar nueva sesión con SOPHIA
+      initSession()
     }
-  }, [sessionId, currentQuestion]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const initSession = async () => {
+    try {
+      setLoading(true)
+      setIsThinking(true)
+
+      // Llamar a SOPHIA para obtener bienvenida
+      const result = await initSophiaSession(lessonId)
+
+      if (result.ok && result.data) {
+        setSessionId(result.data.sessionId)
+
+        // Agregar mensaje de bienvenida
+        const welcomeMessage: ChatMessageType = {
+          id: `sophia-init`,
+          message: result.data.aiResponse.chat.message,
+          time: new Date().toLocaleTimeString('es-PE', {
+            hour: '2-digit',
+            minute: '2-digit'
+          }),
+          isUser: false,
+          username: 'SOPHIA'
+        }
+        setMessages([welcomeMessage])
+
+        // Actualizar estado de sesión
+        const newState = await getSessionState(result.data.sessionId)
+        if (newState) {
+          setSessionState(newState as SessionState)
+        }
+      } else {
+        setError(result.error || 'Error al iniciar sesión')
+      }
+    } catch (err) {
+      console.error('[LESSON-CHAT] Error al iniciar sesión:', err)
+      setError('Error al iniciar la lección')
+    } finally {
+      setLoading(false)
+      setIsThinking(false)
+    }
+  }
 
   const loadSession = async () => {
     if (!sessionId) return

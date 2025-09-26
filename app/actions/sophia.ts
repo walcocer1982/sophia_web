@@ -62,8 +62,8 @@ export async function processSophiaTurn(
       return { ok: false, error: 'Lección no encontrada' };
     }
 
-    // 3. Obtener o crear sesión
-    let lessonSession = await prisma.lessonSession.findFirst({
+    // 3. Obtener sesión existente
+    const lessonSession = await prisma.lessonSession.findFirst({
       where: {
         userId,
         lessonId: input.lessonId,
@@ -73,34 +73,7 @@ export async function processSophiaTurn(
     });
 
     if (!lessonSession) {
-      // Crear nueva sesión
-      const sessionNumber = await getNextSessionNumber(userId, input.lessonId);
-
-      lessonSession = await prisma.lessonSession.create({
-        data: {
-          userId,
-          lessonId: input.lessonId,
-          sessionNumber,
-          currentMomentId: 0,
-          completedMoments: [],
-          aggregateMastery: 0.5,
-          consecutiveCorrect: 0,
-          attemptsInCurrent: 0,
-          sessionSummary: 'Primera interacción con la lección.',
-          isCompleted: false
-        }
-      });
-
-      // Guardar la pregunta inicial de SOPHIA como primer mensaje
-      await prisma.chatMessage.create({
-        data: {
-          sessionId: lessonSession.id,
-          role: 'assistant',
-          content: input.questionShown,
-          momentId: 0,
-          sequence: 0
-        }
-      });
+      return { ok: false, error: 'No hay sesión activa. Por favor inicia la lección primero.' };
     }
 
     // 4. Construir contexto para IA
@@ -424,6 +397,162 @@ async function getNextSessionNumber(userId: string, lessonId: string): Promise<n
   });
 
   return (lastSession?.sessionNumber || 0) + 1;
+}
+
+/**
+ * Server Action para iniciar una nueva sesión con SOPHIA
+ * Genera la bienvenida y primera pregunta
+ */
+export async function initSophiaSession(lessonId: string): Promise<ProcessSophiaTurnResult> {
+  try {
+    // Verificar autenticación
+    const userSession = await auth();
+
+    if (!userSession?.user?.id) {
+      return { ok: false, error: 'Usuario no autenticado. Por favor inicia sesión.' };
+    }
+
+    const userId = userSession.user.id;
+
+    // Cargar lección
+    const lesson = getLessonById(parseInt(lessonId));
+    if (!lesson) {
+      return { ok: false, error: 'Lección no encontrada' };
+    }
+
+    // Verificar si ya existe sesión activa
+    const existingSession = await prisma.lessonSession.findFirst({
+      where: {
+        userId,
+        lessonId,
+        isCompleted: false
+      },
+      orderBy: { startedAt: 'desc' }
+    });
+
+    if (existingSession) {
+      // Ya existe sesión, usar el flujo normal
+      return {
+        ok: true,
+        data: {
+          aiResponse: {
+            chat: {
+              message: 'Continuemos con la lección donde quedamos.',
+              hints: []
+            },
+            progress: {
+              masteryDelta: 0,
+              nextStep: 'RETRY',
+              tags: ['PARTIAL']
+            }
+          },
+          sessionId: existingSession.id,
+          responseId: '',
+        }
+      };
+    }
+
+    // Crear nueva sesión
+    const sessionNumber = await getNextSessionNumber(userId, lessonId);
+    const newSession = await prisma.lessonSession.create({
+      data: {
+        userId,
+        lessonId,
+        sessionNumber,
+        currentMomentId: 0,
+        completedMoments: [],
+        aggregateMastery: 0.5,
+        consecutiveCorrect: 0,
+        attemptsInCurrent: 0,
+        sessionSummary: 'Primera interacción con la lección.',
+        isCompleted: false
+      }
+    });
+
+    // Construir contexto especial para inicio
+    const turnContext = buildTurnPayload({
+      lesson,
+      momentId: 0,
+      sessionSummary: 'Primera interacción con la lección.',
+      questionShown: '', // Sin pregunta previa
+      studentAnswer: '', // Sin respuesta previa
+      aggregateMastery: 0.5,
+      consecutiveCorrect: 0
+    });
+
+    // Llamar a OpenAI para generar bienvenida
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: SOPHIA_SYSTEM_PROMPT },
+        { role: 'user', content: turnContext }
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'lesson_ai_response',
+          strict: true,
+          schema: LessonAIResponseJSONSchema
+        }
+      } as Parameters<typeof openai.chat.completions.create>[0]['response_format'],
+      temperature: 0.6,
+      max_tokens: 600
+    });
+
+    const responseContent = completion.choices[0]?.message?.content;
+    if (!responseContent) {
+      return { ok: false, error: 'Respuesta vacía de OpenAI' };
+    }
+
+    const jsonResponse = JSON.parse(responseContent);
+    const validationResult = safeValidateAIResponse(jsonResponse);
+
+    if (!validationResult.success) {
+      return { ok: false, error: 'Respuesta de IA no válida' };
+    }
+
+    const aiResponse = validationResult.data;
+
+    // Persistir mensaje inicial de SOPHIA
+    await prisma.chatMessage.create({
+      data: {
+        sessionId: newSession.id,
+        role: 'assistant',
+        content: aiResponse.chat.message,
+        momentId: 0,
+        sequence: 0
+      }
+    });
+
+    // Actualizar sesión con el summary inicial
+    await prisma.lessonSession.update({
+      where: { id: newSession.id },
+      data: {
+        sessionSummary: `Sesión iniciada. Sophia presentó objetivos de la lección ${lesson.title}.`,
+        lastAccessedAt: new Date()
+      }
+    });
+
+    return {
+      ok: true,
+      data: {
+        aiResponse,
+        sessionId: newSession.id,
+        responseId: ''
+      }
+    };
+
+  } catch (error) {
+    console.error('[SOPHIA INIT] Error:', error);
+    if (error instanceof Error) {
+      return { ok: false, error: error.message };
+    }
+    return { ok: false, error: 'Error al iniciar sesión con SOPHIA' };
+  }
 }
 
 /**

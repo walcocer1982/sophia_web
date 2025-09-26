@@ -181,9 +181,16 @@ function buildCurrentTurn(
 ): string {
   const parts = [];
 
-  parts.push('## Turno actual');
-  parts.push(`Pregunta mostrada: "${questionShown}"`);
-  parts.push(`Respuesta del estudiante: "${studentAnswer}"`);
+  // Si ambos están vacíos, es el modo init
+  if (!questionShown && !studentAnswer) {
+    parts.push('## Inicio de sesión');
+    parts.push('Esta es la primera interacción del estudiante con la lección.');
+    parts.push('DEBES: Dar una bienvenida breve, presentar 2-3 objetivos clave y formular tu primera pregunta.');
+  } else {
+    parts.push('## Turno actual');
+    parts.push(`Pregunta mostrada: "${questionShown}"`);
+    parts.push(`Respuesta del estudiante: "${studentAnswer}"`);
+  }
 
   return parts.join('\n');
 }
@@ -209,6 +216,9 @@ export function buildTurnPayload(options: TurnPayloadOptions): string {
     throw new Error(`Momento ${momentId} no encontrado en la lección`);
   }
 
+  // Determinar si es modo init
+  const isInitMode = !questionShown && !studentAnswer;
+
   // Construir las partes del contexto
   const parts = [
     '# CONTEXTO DEL TURNO',
@@ -221,17 +231,37 @@ export function buildTurnPayload(options: TurnPayloadOptions): string {
     '',
     buildCurrentTurn(questionShown, studentAnswer),
     '',
-    '# INSTRUCCIÓN',
-    'Evalúa la respuesta del estudiante usando la rúbrica pedagógica provista.',
-    '**IMPORTANTE**: EVALÚA SOLO lo que la pregunta específicamente solicita.',
-    'NO agregues requisitos adicionales de la rúbrica que no fueron pedidos en la pregunta.',
-    'Si la pregunta pide UN concepto, evalúa ESE concepto. No exijas comparaciones no solicitadas.',
-    'Selecciona feedback apropiado basado en el desempeño y las necesidades del estudiante.',
-    'Si el estudiante está confundido, usa los hints graduales (nivel 1, 2 o 3).',
-    'Genera tu respuesta siguiendo el schema JSON v1 exacto.',
-    'Recuerda: eres SOPHIA, la tutora experta. Sé empática pero exigente.',
-    'Responde SOLO con el JSON, sin texto adicional.'
+    '# INSTRUCCIÓN'
   ];
+
+  if (isInitMode) {
+    parts.push(
+      'Esta es la PRIMERA interacción del estudiante con esta lección.',
+      '**DEBES**:',
+      '1. Dar una bienvenida cálida y breve (1-2 frases máximo)',
+      '2. Presentar 2-3 objetivos clave de aprendizaje de forma concisa',
+      '3. Formular inmediatamente tu primera pregunta del momento actual',
+      '',
+      'NO evalúes ninguna respuesta (no hay respuesta aún).',
+      'Tu mensaje debe fluir naturalmente: bienvenida → objetivos → pregunta.',
+      'Usa progress.masteryDelta = 0, nextStep = "RETRY", tags = ["PARTIAL"].',
+      'Genera tu respuesta siguiendo el schema JSON v1 exacto.',
+      'Recuerda: eres SOPHIA, la tutora experta.',
+      'Responde SOLO con el JSON, sin texto adicional.'
+    );
+  } else {
+    parts.push(
+      'Evalúa la respuesta del estudiante usando la rúbrica pedagógica provista.',
+      '**IMPORTANTE**: EVALÚA SOLO lo que la pregunta específicamente solicita.',
+      'NO agregues requisitos adicionales de la rúbrica que no fueron pedidos en la pregunta.',
+      'Si la pregunta pide UN concepto, evalúa ESE concepto. No exijas comparaciones no solicitadas.',
+      'Selecciona feedback apropiado basado en el desempeño y las necesidades del estudiante.',
+      'Si el estudiante está confundido, usa los hints graduales (nivel 1, 2 o 3).',
+      'Genera tu respuesta siguiendo el schema JSON v1 exacto.',
+      'Recuerda: eres SOPHIA, la tutora experta. Sé empática pero exigente.',
+      'Responde SOLO con el JSON, sin texto adicional.'
+    );
+  }
 
   return parts.join('\n');
 }

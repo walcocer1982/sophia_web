@@ -54,7 +54,7 @@ export default function LessonChat({
       const selectedQuestion = currentMoment.referenceQuestions[randomIndex]
       setCurrentQuestion(selectedQuestion)
     }
-  }, [currentMomentId])
+  }, [currentMomentId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cargar mensajes si hay sesión existente
   useEffect(() => {
@@ -75,7 +75,7 @@ export default function LessonChat({
       }
       setMessages([initialMessage])
     }
-  }, [sessionId, currentQuestion])
+  }, [sessionId, currentQuestion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadSession = async () => {
     if (!sessionId) return
@@ -88,7 +88,12 @@ export default function LessonChat({
       ])
 
       // Convertir mensajes al formato esperado por ChatContainer
-      const formattedMessages: ChatMessageType[] = msgs.map((msg: any) => ({
+      const formattedMessages: ChatMessageType[] = msgs.map((msg: {
+        id: string;
+        content: string;
+        createdAt: Date;
+        role: string;
+      }) => ({
         id: msg.id,
         message: msg.content,
         time: new Date(msg.createdAt).toLocaleTimeString('es-PE', {

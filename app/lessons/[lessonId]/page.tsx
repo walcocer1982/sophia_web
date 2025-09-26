@@ -28,7 +28,7 @@ export default async function LessonPage({ params }: LessonPageProps) {
   }
 
   // Obtener o crear sesión de lección para el usuario
-  let lessonSession = await prisma.lessonSession.findFirst({
+  const lessonSession = await prisma.lessonSession.findFirst({
     where: {
       userId: session.user.id,
       lessonId: lessonId,
@@ -54,8 +54,8 @@ export default async function LessonPage({ params }: LessonPageProps) {
     mastery: sessionState.aggregateMastery,
     attempts: sessionState.totalAttempts,
     sessionId: lessonSession.id,
-    nextStep: lessonSession.nextStepHint,
-    tags: lessonSession.lastTags
+    nextStep: lessonSession.nextStepHint || undefined,
+    tags: lessonSession.lastTags || []
   } : undefined
 
   return (

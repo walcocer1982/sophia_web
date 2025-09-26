@@ -4,9 +4,7 @@ import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import OpenAI from 'openai';
 import {
-  LessonAIResponse,
   LessonAIResponseJSONSchema,
-  validateAIResponse,
   safeValidateAIResponse,
   type LessonAIResponseT
 } from '@/lib/ai/schemas';
@@ -141,7 +139,7 @@ export async function processSophiaTurn(
           strict: true,
           schema: LessonAIResponseJSONSchema
         }
-      } as any, // Type assertion needed for OpenAI SDK
+      } as Parameters<typeof openai.chat.completions.create>[0]['response_format'],
       temperature,
       max_tokens: 600 // Aumentado para permitir feedback más rico
     });
@@ -281,7 +279,7 @@ export async function processSophiaTurn(
 
       // Lógica de transición entre momentos (Hito 3)
       let newCurrentMomentId = lessonSession.currentMomentId;
-      let newCompletedMoments = [...lessonSession.completedMoments];
+      const newCompletedMoments = [...lessonSession.completedMoments];
       let newAttemptsInCurrent = lessonSession.attemptsInCurrent + 1;
       let isCompleted = lessonSession.isCompleted;
 

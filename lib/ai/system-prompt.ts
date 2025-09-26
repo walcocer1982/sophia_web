@@ -107,15 +107,3 @@ Devuelve SOLO este JSON (sin texto adicional). TODOS los campos son obligatorios
 }
 `;
 
-/**
- * Construye el system prompt completo con el contexto inyectado
- */
-export function buildSystemPrompt(
-  lessonContext: string,
-  sessionSummary: string,
-  currentTurn: string
-): string {
-  // Por ahora retornamos el prompt base
-  // En el helper build-context.ts construiremos el contexto apropiado
-  return SOPHIA_SYSTEM_PROMPT;
-}

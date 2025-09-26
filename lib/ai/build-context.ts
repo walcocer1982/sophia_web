@@ -73,7 +73,7 @@ function buildMomentContext(moment: LessonMoment, lessonId: number = 1): string 
   // Preguntas de referencia
   if (moment.referenceQuestions && moment.referenceQuestions.length > 0) {
     parts.push('\nPreguntas disponibles:');
-    moment.referenceQuestions.forEach((q, i) => {
+    moment.referenceQuestions.forEach((q) => {
       const truncated = q.length > 150 ? q.substring(0, 147) + '...' : q;
       parts.push(`- ${truncated}`);
     });

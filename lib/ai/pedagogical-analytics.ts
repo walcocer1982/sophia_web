@@ -2,7 +2,6 @@
  * Analytics pedagógicos y personalización de feedback
  */
 
-import { getMomentRubric } from './moment-rubrics';
 import type { ResponseTag } from '@prisma/client';
 
 /**
@@ -167,7 +166,11 @@ function getMomentName(momentId: number): string {
  * Calcula métricas de sesión para el debug log
  */
 export function calculateSessionMetrics(
-  sessionHistory: any[]
+  sessionHistory: Array<{
+    isCorrect: boolean;
+    momentId: number;
+    masteryDelta?: number;
+  }>
 ): {
   overallAccuracy: number;
   avgResponseTime?: number;

@@ -13,9 +13,25 @@ interface LessonLayoutWrapperProps {
   lesson: LessonStructure
   lessonId: string
   initialSessionId?: string
-  initialSessionState?: any
+  initialSessionState?: {
+    currentMomentId: number;
+    completedMoments: number[];
+    aggregateMastery: number;
+    consecutiveCorrect: number;
+    totalAttempts: number;
+    correctAnswers: number;
+    isCompleted: boolean;
+  }
   userSession?: Session | null
-  debugInfo?: any
+  debugInfo?: {
+    currentMomentId?: number;
+    lastResponse?: string;
+    mastery?: number;
+    tags?: string[];
+    nextStep?: string;
+    attempts?: number;
+    sessionId?: string;
+  }
 }
 
 export default function LessonLayoutWrapper({

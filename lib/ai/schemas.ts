@@ -29,8 +29,17 @@ export const DifficultyEnum = z.enum([
   'HARD'
 ]);
 
+export const TurnIntentEnum = z.enum([
+  'ANSWER',
+  'CLARIFY',
+  'OFFTOPIC'
+]);
+
 // Schema principal de respuesta IA
 export const LessonAIResponse = z.object({
+  turnIntent: TurnIntentEnum
+    .describe('Intent of the student turn: ANSWER (response to question), CLARIFY (asking for clarification), OFFTOPIC (unrelated)'),
+
   chat: z.object({
     message: z.string()
       .min(10, 'Message must be at least 10 characters')
@@ -71,6 +80,11 @@ export type LessonAIResponseT = z.infer<typeof LessonAIResponse>;
 export const LessonAIResponseJSONSchema = {
   type: "object",
   properties: {
+    turnIntent: {
+      type: "string",
+      enum: ["ANSWER", "CLARIFY", "OFFTOPIC"],
+      description: "Intent of the student turn"
+    },
     chat: {
       type: "object",
       properties: {
@@ -127,7 +141,7 @@ export const LessonAIResponseJSONSchema = {
       additionalProperties: false
     }
   },
-  required: ["chat", "progress", "analytics"],  // Con strict: true todos deben estar
+  required: ["turnIntent", "chat", "progress", "analytics"],  // Con strict: true todos deben estar
   additionalProperties: false
 } as const;
 

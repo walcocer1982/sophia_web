@@ -3,7 +3,7 @@
  * Optimizado para ~120-180 tokens con informacion pedagogicamente relevante.
  */
 
-import type { LessonStructure, LessonMoment } from '@/types/lesson-types';
+import type { LessonStructure, LessonMoment, LessonTarget } from '@/types/lesson-types';
 import type { ResponseTag, NextStep } from '@prisma/client';
 
 // ---------------------------------------------------------------
@@ -17,6 +17,10 @@ export interface SessionLike {
   lastMasteryDelta: number | null;
   lastTags: string[];
   nextStepHint: string | null;
+  // Nuevos campos para targets
+  currentTargetId?: number;
+  targetMastery?: Record<number, number>;  // {targetId: mastery}
+  completedTargets?: number[];
 }
 
 export interface StudentResponseLike {
@@ -42,7 +46,7 @@ export interface AIOutcomeLike {
 // ---------------------------------------------------------------
 // UTILIDADES
 // ---------------------------------------------------------------
-const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+// const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
 function words(s: string): string[] {
   return s
@@ -62,14 +66,59 @@ function pct(n: number, decimals = 0) {
   return (n * 100).toFixed(decimals) + "%";
 }
 
-function containsAny(text: string, needles: string[]): boolean {
-  const t = text.toLowerCase();
-  return needles.some((n) => t.includes(n.toLowerCase()));
+// Función comentada - mantener como referencia
+// function containsAny(text: string, needles: string[]): boolean {
+//   const t = text.toLowerCase();
+//   return needles.some((n) => t.includes(n.toLowerCase()));
+// }
+
+// Determinar nivel basado en mastery (rúbrica de 5 niveles)
+function masteryToLevel(mastery: number): number {
+  if (mastery < 0.2) return 1;  // Inicial
+  if (mastery < 0.4) return 2;  // Básico
+  if (mastery < 0.65) return 3; // Competente
+  if (mastery < 0.85) return 4; // Avanzado
+  return 5;  // Dominio
+}
+
+// Extraer evidencia específica de la respuesta y tags
+function extractEvidence(
+  studentAnswer: string,
+  tags: (ResponseTag | string)[],
+  target?: LessonTarget
+): string {
+  const evidenceItems = [];
+
+  // Evidencia por tags
+  if (tags.includes("CORRECT")) {
+    evidenceItems.push("respuesta_correcta");
+  } else if (tags.includes("PARTIAL")) {
+    evidenceItems.push("comprensión_parcial");
+  } else if (tags.includes("INCORRECT")) {
+    evidenceItems.push("error_conceptual");
+  }
+
+  // Evidencia específica del target
+  if (target && tags.includes("CORRECT")) {
+    const criterio = target.rubric5.levels[2]?.criteria[0]; // Criterio del nivel competente
+    if (criterio) {
+      evidenceItems.push(summarize(criterio, 5).toLowerCase());
+    }
+  }
+
+  // Evidencia de la respuesta
+  if (studentAnswer.length > 50) {
+    evidenceItems.push("explicación_detallada");
+  }
+
+  return evidenceItems.slice(0, 3).join(", ");
 }
 
 // ---------------------------------------------------------------
 // DETECCION DE BRECHA PEDAGOGICA
 // ---------------------------------------------------------------
+// Función comentada - mantener como referencia para futura implementación
+/*
 function inferGap(params: {
   tags: (ResponseTag | string)[];
   moment: LessonMoment;
@@ -114,6 +163,7 @@ function inferGap(params: {
   // 5) Sin brecha
   return "PROGRESO OK - mantener ritmo actual.";
 }
+*/
 
 // ---------------------------------------------------------------
 // DECISION PEDAGOGICA PARA PROXIMO TURNO
@@ -189,7 +239,7 @@ function analyzePattern(session: SessionLike): string {
 }
 
 // ---------------------------------------------------------------
-// FUNCION PRINCIPAL
+// FUNCION PRINCIPAL MEJORADA CON TARGETS
 // ---------------------------------------------------------------
 export function buildSessionSummary(args: {
   lesson: LessonStructure;
@@ -201,39 +251,106 @@ export function buildSessionSummary(args: {
 
   // Si no hay interaccion previa, resumen inicial
   if (!lastSR || !lastAI) {
-    return `Inicio de leccion "${lesson.title}". Momento 0: "${lesson.moments[0].title}". Sin interacciones previas. Objetivo: ${lesson.moments[0].goal}.`;
+    const firstMoment = lesson.moments[0];
+    const firstTarget = lesson.targets?.find(t => t.id === firstMoment.primaryTargetId);
+    return `Inicio de lección "${lesson.title}". Momento 0: "${firstMoment.title}". Target: ${firstTarget?.title || 'Sin definir'}. Sin interacciones previas.`;
   }
 
   const moment = lesson.moments.find((m) => m.id === session.currentMomentId) || lesson.moments[0];
+  const currentTarget = lesson.targets?.find(t => t.id === moment.primaryTargetId);
   const totalMoments = lesson.moments.length;
 
-  // 1. ESTADO
-  const mastery = clamp(session.aggregateMastery, 0, 1);
-  const delta = lastAI.progress.masteryDelta;
+  // 1. ESTADO - Ahora con información de targets
+  const targetMastery = session.targetMastery || {};
+  const targetStates = lesson.targets?.map(target => {
+    const mastery = targetMastery[target.id] || 0;
+    const level = masteryToLevel(mastery);
+    const isCompleted = session.completedTargets?.includes(target.id);
+
+    if (mastery > 0 || target.id === currentTarget?.id) {
+      return `T${target.id}:L${level}(${pct(mastery)})${isCompleted ? '✓' : ''}`;
+    }
+    return null;
+  }).filter(Boolean).join(', ') || `T${currentTarget?.id}:L1(0%)`;
+
   const pattern = analyzePattern(session);
+  const estado = `${targetStates}, intentos:${session.attemptsInCurrent}, ${pattern}`;
 
-  const estado = `M${moment.id}/${totalMoments} "${moment.title}". Mastery: ${pct(mastery)}(Delta${delta >= 0 ? '+' : ''}${pct(delta, 0)}). Patron: ${pattern}. Intentos: ${session.attemptsInCurrent}.`;
+  // 2. EVIDENCIA - Acumular evidencia histórica y actual
+  const evidenceItems = [];
 
-  // 2. EVIDENCIA
-  const gist = summarize(lastSR.studentAnswer, 15);
-  const tags = lastAI.progress.tags.join(",");
-  const evidencia = `Ultima: "${gist}" -> [${tags}].`;
+  // Evidencia del turno actual
+  if (currentTarget && lastAI) {
+    const currentEvidence = extractEvidence(
+      lastSR.studentAnswer,
+      lastAI.progress.tags,
+      currentTarget
+    );
+    if (currentEvidence) {
+      evidenceItems.push(`T${currentTarget.id}:${currentEvidence}`);
+    }
+  }
 
-  // 3. BRECHA
-  const brecha = inferGap({
-    tags: lastAI.progress.tags,
-    moment,
-    studentAnswer: lastSR.studentAnswer,
-    reasoningSignals: lastAI.analytics?.reasoningSignals,
-  });
+  // Agregar evidencia histórica relevante (últimos 2 turnos significativos)
+  if (session.lastTags && session.lastTags.length > 0) {
+    const prevEvidence = session.lastTags.includes("CORRECT")
+      ? "progreso_previo"
+      : session.lastTags.includes("PARTIAL")
+        ? "avance_parcial"
+        : "necesita_refuerzo";
+    evidenceItems.push(prevEvidence);
+  }
 
-  // 4. PLAN
+  const evidencia = evidenceItems.slice(0, 3).join('; ') || "sin_evidencia_clara";
+
+  // 3. BRECHA - Específica del target actual
+  let brecha = "sin_brecha_identificada";
+  if (currentTarget) {
+    const currentMastery = targetMastery[currentTarget.id] || 0;
+    const gap = currentTarget.minMastery - currentMastery;
+
+    if (gap > 0) {
+      const level = masteryToLevel(currentMastery);
+      const targetLevel = masteryToLevel(currentTarget.minMastery);
+      brecha = `T${currentTarget.id}:${currentTarget.title.substring(0, 20)}_nivel_${level}_requiere_${targetLevel} (falta_${pct(gap)})`;
+
+      // Agregar detalle de error si existe
+      if (lastAI?.progress.tags.includes("INCORRECT") || lastAI?.progress.tags.includes("CONCEPTUAL")) {
+        const errorComun = currentTarget.rubric5.commonErrors[0];
+        if (errorComun) {
+          brecha += `; error:${summarize(errorComun, 5).toLowerCase()}`;
+        }
+      }
+    } else {
+      brecha = `T${currentTarget.id}_logrado`;
+    }
+  }
+
+  // 4. PLAN - Basado en targets y progreso
   const plan = decidePlan({
     session,
     ai: lastAI,
     moment,
     totalMoments
   });
+
+  // Si hay información del target, enriquecer el plan
+  if (currentTarget && targetMastery[currentTarget.id] !== undefined) {
+    const mastery = targetMastery[currentTarget.id];
+    if (mastery >= currentTarget.minMastery) {
+      // Target logrado, sugerir avance
+      const nextMoment = lesson.moments.find(m => m.id === moment.id + 1);
+      const nextTarget = nextMoment ? lesson.targets?.find(t => t.id === nextMoment.primaryTargetId) : null;
+      if (nextTarget) {
+        return [
+          `[ESTADO] ${estado}`,
+          `[EVIDENCIA] ${evidencia}`,
+          `[BRECHA] T${currentTarget.id}_logrado, siguiente:T${nextTarget.id}_${nextTarget.title.substring(0, 15)}`,
+          `[PLAN] Validar_logro_T${currentTarget.id}, avanzar_a_T${nextTarget.id}`
+        ].join('\n');
+      }
+    }
+  }
 
   // 5. ENSAMBLAJE
   const lines = [
@@ -243,7 +360,7 @@ export function buildSessionSummary(args: {
     `[PLAN] ${plan}`
   ];
 
-  // Proteccion de longitud (~150 tokens, ~600 chars)
+  // Proteccion de longitud (~600 chars)
   const result = lines.join("\n");
   if (result.length <= 600) {
     return result;
@@ -251,11 +368,11 @@ export function buildSessionSummary(args: {
 
   // Si excede, version compacta
   return [
-    `M${moment.id}/${totalMoments}. Mastery:${pct(mastery)}. ${pattern}.`,
-    `"${summarize(lastSR.studentAnswer, 10)}" -> [${tags}].`,
-    brecha,
-    plan
-  ].join("\n");
+    `[E] ${targetStates}`,
+    `[V] ${evidenceItems[0] || 'sin_evidencia'}`,
+    `[B] ${brecha.substring(0, 50)}`,
+    `[P] ${plan.substring(0, 50)}`
+  ].join('\n');
 }
 
 /**

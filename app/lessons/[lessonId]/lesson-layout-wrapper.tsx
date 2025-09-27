@@ -39,8 +39,7 @@ export default function LessonLayoutWrapper({
   lessonId,
   initialSessionId,
   initialSessionState,
-  userSession,
-  debugInfo
+  userSession
 }: LessonLayoutWrapperProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
 

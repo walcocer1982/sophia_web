@@ -45,10 +45,15 @@ export async function getLessonDebugInfo(lessonId: string) {
     return {
       sessionId: lessonSession.id.substring(0, 8),
       currentMomentId: lessonSession.currentMomentId,
+      currentTargetId: lessonSession.currentTargetId,
       mastery: lessonSession.aggregateMastery,
+      masteryGlobal: lessonSession.masteryGlobal,
+      targetMastery: lessonSession.targetMastery as Record<number, number> | null,
+      completedTargets: lessonSession.completedTargets,
       lastMasteryDelta: lessonSession.lastMasteryDelta,
       tags: tags,
       nextStep: nextStep || lessonSession.nextStepHint,
+      sessionSummary: lessonSession.sessionSummary || 'Sin resumen disponible',
       updatedAt: lessonSession.lastAccessedAt.toISOString()
     }
   } catch (error) {

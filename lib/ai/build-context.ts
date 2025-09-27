@@ -3,7 +3,7 @@
  * Optimizado para reducir tokens mientras mantiene información clave
  */
 
-import type { LessonStructure, LessonMoment } from '@/types/lesson-types';
+import type { LessonStructure, LessonMoment, LessonTarget } from '@/types/lesson-types';
 
 /**
  * Opciones para construir el payload del turno
@@ -16,6 +16,7 @@ interface TurnPayloadOptions {
   studentAnswer: string;
   aggregateMastery?: number;
   consecutiveCorrect?: number;
+  targetMastery?: Record<number, number>; // Agregar mastery por target
 }
 
 /**
@@ -59,6 +60,55 @@ function buildLessonContext(lesson: LessonStructure): string {
 }
 
 /**
+ * Construye el contexto del target activo con rúbrica de 5 niveles
+ */
+function buildTargetContext(target: LessonTarget, currentMastery?: number): string {
+  const parts = [];
+
+  parts.push('## Target de Evaluación');
+  parts.push(`ID: ${target.id}`);
+  parts.push(`Título: ${target.title}`);
+  parts.push(`Descripción: ${target.description}`);
+  parts.push(`Mastery mínimo requerido: ${(target.minMastery * 100).toFixed(0)}%`);
+
+  if (currentMastery !== undefined) {
+    parts.push(`Mastery actual del estudiante: ${(currentMastery * 100).toFixed(0)}%`);
+  }
+
+  // Rúbrica de 5 niveles (resumida para optimizar tokens)
+  parts.push('\n## Rúbrica de Evaluación (5 niveles)');
+  target.rubric5.levels.forEach(level => {
+    // Solo incluir 1-2 criterios clave por nivel para reducir tokens
+    const criteriaResumen = level.criteria.slice(0, 2).join('; ');
+    parts.push(`- Nivel ${level.level} (${level.name}): ${criteriaResumen}`);
+  });
+
+  // Errores comunes
+  if (target.rubric5.commonErrors && target.rubric5.commonErrors.length > 0) {
+    parts.push('\n## Errores comunes a detectar:');
+    target.rubric5.commonErrors.slice(0, 3).forEach(error => {
+      parts.push(`- ${error}`);
+    });
+  }
+
+  // Hints disponibles
+  if (target.rubric5.hints) {
+    parts.push('\n## Pistas disponibles:');
+    if (target.rubric5.hints.level1) {
+      parts.push(`- Nivel 1 (sutil): ${target.rubric5.hints.level1}`);
+    }
+    if (target.rubric5.hints.level2) {
+      parts.push(`- Nivel 2 (directo): ${target.rubric5.hints.level2}`);
+    }
+    if (target.rubric5.hints.level3) {
+      parts.push(`- Nivel 3 (explícito): ${target.rubric5.hints.level3}`);
+    }
+  }
+
+  return parts.join('\n');
+}
+
+/**
  * Construye el contexto del momento actual con rúbricas pedagógicas
  */
 function buildMomentContext(moment: LessonMoment): string {
@@ -67,22 +117,23 @@ function buildMomentContext(moment: LessonMoment): string {
   parts.push('## Momento actual');
   parts.push(`ID: ${moment.id}`);
   parts.push(`Título: ${moment.title}`);
-  parts.push(`Meta: ${moment.goal}`);
+  parts.push(`Meta narrativa: ${moment.goal}`);
+  parts.push(`Target evaluado: ID ${moment.primaryTargetId}`);
 
   // Preguntas de referencia como inspiración
   if (moment.referenceQuestions && moment.referenceQuestions.length > 0) {
     parts.push('\n## Preguntas de referencia (SOLO INSPIRACIÓN)');
     parts.push('**IMPORTANTE**: NO uses estas preguntas literalmente. Son solo ideas.');
     parts.push('**DEBES**: Reformular, combinar o crear nuevas preguntas que:');
-    parts.push('- Sean más claras y específicas para el estudiante actual');
-    parts.push('- Se ajusten mejor al nivel de mastery y contexto');
+    parts.push('- Evalúen específicamente el target activo');
+    parts.push('- Se ajusten al nivel actual del estudiante');
     parts.push('- Conecten naturalmente con la conversación previa');
     parts.push('\nIdeas base:');
     moment.referenceQuestions.forEach((q) => {
       const truncated = q.length > 150 ? q.substring(0, 147) + '...' : q;
       parts.push(`- ${truncated}`);
     });
-    parts.push('\n**Tu pregunta debe ser ORIGINAL y ADAPTADA al momento actual.**');
+    parts.push('\n**Tu pregunta debe evaluar el TARGET, no solo seguir el guión.**');
   }
 
   // Imágenes disponibles
@@ -93,45 +144,7 @@ function buildMomentContext(moment: LessonMoment): string {
     });
   }
 
-  // Incluir rúbrica pedagógica del momento si existe
-  if (moment.rubric) {
-    parts.push('\n## Rúbrica de Evaluación Pedagógica');
-
-    // Criterios de evaluación
-    parts.push('\nCriterios de evaluación:');
-    parts.push(`✓ Correcto si: ${moment.rubric.correct.join('; ')}`);
-    if (moment.rubric.partial) {
-      parts.push(`~ Parcial si: ${moment.rubric.partial.join('; ')}`);
-    }
-    if (moment.rubric.vague) {
-      parts.push(`? Vago si: ${moment.rubric.vague.join('; ')}`);
-    }
-    if (moment.rubric.incorrect) {
-      parts.push(`✗ Incorrecto si: ${moment.rubric.incorrect.join('; ')}`);
-    }
-
-    // Errores comunes si están definidos
-    if (moment.rubric.commonErrors && moment.rubric.commonErrors.length > 0) {
-      parts.push('\nErrores comunes a detectar:');
-      moment.rubric.commonErrors.forEach(error => {
-        parts.push(`- ${error}`);
-      });
-    }
-
-    // Hints disponibles si están definidos
-    if (moment.rubric.hints) {
-      parts.push('\nPistas disponibles por nivel:');
-      if (moment.rubric.hints.level1) {
-        parts.push(`- Nivel 1 (sutil): ${moment.rubric.hints.level1}`);
-      }
-      if (moment.rubric.hints.level2) {
-        parts.push(`- Nivel 2 (directo): ${moment.rubric.hints.level2}`);
-      }
-      if (moment.rubric.hints.level3) {
-        parts.push(`- Nivel 3 (explícito): ${moment.rubric.hints.level3}`);
-      }
-    }
-  }
+  // NOTA: La rúbrica ahora está en el Target, no en el momento
 
   return parts.join('\n');
 }
@@ -207,7 +220,8 @@ export function buildTurnPayload(options: TurnPayloadOptions): string {
     questionShown,
     studentAnswer,
     aggregateMastery,
-    consecutiveCorrect
+    consecutiveCorrect,
+    targetMastery = {}
   } = options;
 
   // Encontrar el momento actual
@@ -215,6 +229,15 @@ export function buildTurnPayload(options: TurnPayloadOptions): string {
   if (!currentMoment) {
     throw new Error(`Momento ${momentId} no encontrado en la lección`);
   }
+
+  // Encontrar el target activo del momento
+  const currentTarget = lesson.targets?.find(t => t.id === currentMoment.primaryTargetId);
+  if (!currentTarget) {
+    throw new Error(`Target ${currentMoment.primaryTargetId} no encontrado en la lección`);
+  }
+
+  // Obtener el mastery actual del target desde los datos pasados
+  const targetMasteryActual = targetMastery[currentTarget.id] || 0.5;
 
   // Determinar si es modo init
   const isInitMode = !questionShown && !studentAnswer;
@@ -224,6 +247,8 @@ export function buildTurnPayload(options: TurnPayloadOptions): string {
     '# CONTEXTO DEL TURNO',
     '',
     buildLessonContext(lesson),
+    '',
+    buildTargetContext(currentTarget, targetMasteryActual),
     '',
     buildMomentContext(currentMoment),
     '',
@@ -251,12 +276,13 @@ export function buildTurnPayload(options: TurnPayloadOptions): string {
     );
   } else {
     parts.push(
-      'Evalúa la respuesta del estudiante usando la rúbrica pedagógica provista.',
-      '**IMPORTANTE**: EVALÚA SOLO lo que la pregunta específicamente solicita.',
-      'NO agregues requisitos adicionales de la rúbrica que no fueron pedidos en la pregunta.',
-      'Si la pregunta pide UN concepto, evalúa ESE concepto. No exijas comparaciones no solicitadas.',
-      'Selecciona feedback apropiado basado en el desempeño y las necesidades del estudiante.',
-      'Si el estudiante está confundido, usa los hints graduales (nivel 1, 2 o 3).',
+      'Evalúa la respuesta del estudiante usando la rúbrica de 5 niveles del TARGET activo.',
+      '**IMPORTANTE**: Evalúa EXCLUSIVAMENTE el target especificado arriba.',
+      'Identifica el NIVEL alcanzado (1-5) según los criterios observables.',
+      'Usa el nivel para determinar tags y masteryDelta según las reglas del sistema.',
+      'NO evalúes aspectos fuera del target actual.',
+      'Selecciona feedback apropiado para ayudar al estudiante a alcanzar el siguiente nivel.',
+      'Si el estudiante está confundido, usa los hints del target (nivel 1, 2 o 3).',
       'Genera tu respuesta siguiendo el schema JSON v1 exacto.',
       'Recuerda: eres SOPHIA, la tutora experta. Sé empática pero exigente.',
       'Responde SOLO con el JSON, sin texto adicional.'

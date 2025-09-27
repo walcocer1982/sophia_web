@@ -122,6 +122,16 @@ model LessonSession {
   lastDifficulty     Difficulty?
   nextStepHint       String?
 
+  // Target-based mastery tracking (Hito 2)
+  currentTargetId    Int?         // ID del target actual siendo evaluado
+  targetMastery      Json?        // Mapa { [targetId]: number } con mastery por target
+  completedTargets   Int[]        @default([]) // IDs de targets que alcanzaron minMastery
+  masteryGlobal      Float        @default(0.0) // Promedio ponderado de todos los targets
+
+  // Clarification tracking (Hito 2 - Plan clarificaciones)
+  lastQuestionShown  String?      @db.Text   // Última pregunta/consigna mostrada al estudiante
+  clarifyTurns       Int          @default(0) // Contador de turnos de aclaración
+
   // Timestamps
   startedAt         DateTime @default(now())
   completedAt       DateTime?
@@ -181,12 +191,16 @@ model StudentResponse {
 
   // Contexto educativo (ahora Int)
   momentId          Int           // ej: 0, 1, 2...
+  targetId          Int?          // ID del target evaluado en este turno (Hito 2)
 
   // Turno: entrada del alumno
   question          String        // pregunta mostrada
   studentAnswer     String        @db.Text
 
-  // Evaluación “clásica” (opcional en MVP, mantenida por compatibilidad)
+  // Control de evaluación (Hito 2 - Plan clarificaciones)
+  isEvaluated       Boolean       @default(true) // false para turnos CLARIFY que no se evalúan
+
+  // Evaluación "clásica" (opcional en MVP, mantenida por compatibilidad)
   isCorrect         Boolean
   score             Float?        // 0-1
   aiAnalysis        Json?         // análisis completo (si lo sigues usando)
@@ -222,6 +236,7 @@ model AIOutcome {
 
   // Contexto
   momentId          Int           // momento evaluado (para consultas rápidas)
+  targetId          Int?          // ID del target evaluado en este turno (Hito 2)
   // Respuesta IA cruda (JSON del schema validado por Zod)
   raw               Json
 

@@ -14,6 +14,8 @@ import { SOPHIA_SYSTEM_PROMPT } from '@/lib/ai/system-prompt';
 import { getLessonById } from '@/data_lessons';
 import { analyzeStudentProfile, generatePedagogicalRecommendations, personalizeFeedback } from '@/lib/ai/pedagogical-analytics';
 import type { ResponseTag, NextStep, Difficulty } from '@prisma/client';
+import { calculateGlobalMastery, clamp, validateAndCorrectMasteryDelta, masteryToLevel } from '@/lib/ai/mapping';
+import { detectTurnIntent, extractClarificationTerm } from '@/lib/ai/clarification-utils';
 
 /**
  * Input para el server action
@@ -80,6 +82,16 @@ export async function processSophiaTurn(
     // Usar el momento actual de la sesión en lugar del enviado (Hito 3)
     const actualMomentId = lessonSession.currentMomentId;
 
+    // Obtener el target activo del momento actual
+    const currentMoment = lesson.moments?.find(m => m.id === actualMomentId);
+    const currentTarget = lesson.targets?.find(t => t.id === currentMoment?.primaryTargetId);
+
+    // Obtener targetMastery actual desde la sesión
+    const targetMasteries = (lessonSession.targetMastery as Record<number, number>) || {};
+    const currentTargetMastery = currentTarget ? (targetMasteries[currentTarget.id] || 0.5) : 0.5;
+
+    // console.log(`[SOPHIA] Momento: ${actualMomentId}, Target: ${currentTarget?.id} - ${currentTarget?.title}, Mastery actual: ${(currentTargetMastery * 100).toFixed(0)}%`);
+
     const turnContext = buildTurnPayload({
       lesson,
       momentId: actualMomentId,
@@ -87,7 +99,8 @@ export async function processSophiaTurn(
       questionShown: input.questionShown,
       studentAnswer: input.studentAnswer,
       aggregateMastery: lessonSession.aggregateMastery,
-      consecutiveCorrect: lessonSession.consecutiveCorrect
+      consecutiveCorrect: lessonSession.consecutiveCorrect,
+      targetMastery: targetMasteries // Pasar el mastery real por target
     });
 
     // 5. Llamar a OpenAI con structured output
@@ -136,6 +149,42 @@ export async function processSophiaTurn(
 
     const aiResponse = validationResult.data;
 
+    // 6.5. Aplicar heurística de fallback para turnIntent si es necesario
+    const detectedIntent = detectTurnIntent(input.studentAnswer);
+
+    // Si nuestra heurística detecta CLARIFY pero la IA no lo marcó, forzar corrección
+    if (detectedIntent === 'CLARIFY' && aiResponse.turnIntent !== 'CLARIFY') {
+      // console.log('[SOPHIA] Fallback: Forzando turnIntent=CLARIFY (detectado por heurística)');
+
+      // Forzar valores apropiados para aclaración
+      aiResponse.turnIntent = 'CLARIFY';
+      aiResponse.progress.masteryDelta = 0;
+      aiResponse.progress.nextStep = 'RETRY';
+
+      // Asegurar tags apropiados
+      if (!aiResponse.progress.tags.includes('NEEDS_HELP') &&
+          !aiResponse.progress.tags.includes('CONCEPTUAL')) {
+        aiResponse.progress.tags = ['NEEDS_HELP'];
+      }
+
+      // Agregar señal de MODE:CLARIFY si no está
+      if (aiResponse.analytics && !aiResponse.analytics.reasoningSignals?.includes('MODE:CLARIFY')) {
+        if (!aiResponse.analytics.reasoningSignals) {
+          aiResponse.analytics.reasoningSignals = [];
+        }
+        aiResponse.analytics.reasoningSignals.push('MODE:CLARIFY');
+      }
+
+      // Extraer término de aclaración si es posible
+      const term = extractClarificationTerm(input.studentAnswer);
+      if (term) {
+        // console.log(`[SOPHIA] Término a aclarar detectado: "${term}"`);
+      }
+    }
+
+    // Log de decisión final
+    // console.log(`[SOPHIA] turnIntent final: ${aiResponse.turnIntent} (heurística: ${detectedIntent}`);
+
     // 7. Analizar historial para personalización (si existe suficiente data)
     let personalizedMessage = aiResponse.chat.message;
 
@@ -177,7 +226,25 @@ export async function processSophiaTurn(
 
     }
 
-    // 8. Persistir en transacción atómica
+    // 8. Guard de consigna para CLARIFY - mantener misma pregunta
+    let finalMessage = personalizedMessage;
+    const lastQuestionShown = lessonSession.lastQuestionShown || input.questionShown;
+
+    if (aiResponse.turnIntent === 'CLARIFY') {
+      // Extraer la pregunta del mensaje de la IA
+      const messageLines = finalMessage.split('\n');
+      const lastLine = messageLines[messageLines.length - 1];
+
+      // Si la última línea no es la pregunta original, reemplazarla
+      if (!lastLine.includes(lastQuestionShown.substring(0, 30))) {
+        // console.log('[SOPHIA] Guard de consigna: Forzando re-pregunta original');
+        // Mantener la explicación pero cambiar la pregunta final
+        messageLines[messageLines.length - 1] = lastQuestionShown;
+        finalMessage = messageLines.join('\n');
+      }
+    }
+
+    // 9. Persistir en transacción atómica CON ROUTER DE TURNO
 
     const result = await prisma.$transaction(async (tx) => {
       // Obtener siguiente sequence para mensajes
@@ -198,85 +265,188 @@ export async function processSophiaTurn(
         }
       });
 
-      // Crear StudentResponse
-      const isCorrect = aiResponse.progress.tags.includes('CORRECT');
-      const score = isCorrect ? 0.8 + aiResponse.progress.masteryDelta : 0.3 + aiResponse.progress.masteryDelta;
+      // ROUTER DEL TURNO - Crear StudentResponse según turnIntent
+      let studentResponse = null;
+      let aiOutcome = null;
+      let correctedMasteryDelta = 0;
 
-      const studentResponse = await tx.studentResponse.create({
-        data: {
-          sessionId: lessonSession.id,
-          messageId: userMessage.id,
-          momentId: actualMomentId,
-          question: input.questionShown,
-          studentAnswer: input.studentAnswer,
-          isCorrect,
-          score: Math.max(0, Math.min(1, score)),
-          feedback: personalizedMessage, // Usar mensaje personalizado
-          hintsGiven: aiResponse.chat.hints || [],
-          attempt: lessonSession.attemptsInCurrent + 1
+      if (aiResponse.turnIntent === 'CLARIFY') {
+        // RUTA CLARIFY: NO evaluar, NO cambiar mastery, NO incrementar intentos
+        // console.log('[SOPHIA] Turno CLARIFY: Saltando evaluación y preservando estado');
+
+        // Crear StudentResponse mínimo marcado como no evaluado
+        studentResponse = await tx.studentResponse.create({
+          data: {
+            sessionId: lessonSession.id,
+            messageId: userMessage.id,
+            momentId: actualMomentId,
+            targetId: currentTarget?.id,
+            question: input.questionShown,
+            studentAnswer: input.studentAnswer,
+            isEvaluated: false, // IMPORTANTE: Marcar como no evaluado
+            isCorrect: false, // Valor por defecto, no se usa
+            score: 0, // Sin puntuación
+            feedback: finalMessage,
+            hintsGiven: [],
+            attempt: lessonSession.attemptsInCurrent // NO incrementar
+          }
+        });
+
+        // NO crear AIOutcome para CLARIFY
+
+      } else {
+        // RUTA ANSWER/OFFTOPIC: Flujo normal de evaluación
+        const isCorrect = aiResponse.progress.tags.includes('CORRECT');
+        const score = isCorrect ? 0.8 + aiResponse.progress.masteryDelta : 0.3 + aiResponse.progress.masteryDelta;
+
+        studentResponse = await tx.studentResponse.create({
+          data: {
+            sessionId: lessonSession.id,
+            messageId: userMessage.id,
+            momentId: actualMomentId,
+            targetId: currentTarget?.id,
+            question: input.questionShown,
+            studentAnswer: input.studentAnswer,
+            isEvaluated: true, // Se evalúa normalmente
+            isCorrect,
+            score: Math.max(0, Math.min(1, score)),
+            feedback: finalMessage,
+            hintsGiven: aiResponse.chat.hints || [],
+            attempt: lessonSession.attemptsInCurrent + 1
+          }
+        });
+
+        // Validar y corregir masteryDelta según el nivel
+        const inferredLevel = masteryToLevel(currentTargetMastery);
+        const validation = validateAndCorrectMasteryDelta(
+          inferredLevel,
+          aiResponse.progress.tags.map(tag => tag.toUpperCase() as ResponseTag),
+          aiResponse.progress.masteryDelta
+        );
+
+        if (!validation.isValid) {
+          // console.log(`[SOPHIA] Corrigiendo masteryDelta: ${validation.reason}`);
         }
-      });
 
-      // Crear AIOutcome
-      const aiOutcome = await tx.aIOutcome.create({
+        correctedMasteryDelta = validation.correctedDelta;
+
+        // Crear AIOutcome solo para turnos evaluados
+        aiOutcome = await tx.aIOutcome.create({
         data: {
           sessionId: lessonSession.id,
           responseId: studentResponse.id,
           momentId: actualMomentId,
+          targetId: currentTarget?.id, // Agregar targetId
           raw: jsonResponse,
-          aiMessage: personalizedMessage, // Usar mensaje personalizado
+          aiMessage: finalMessage, // Usar mensaje final con guard
           aiHints: aiResponse.chat.hints || [],
-          masteryDelta: aiResponse.progress.masteryDelta,
+          masteryDelta: correctedMasteryDelta, // Usar delta corregido
           nextStep: aiResponse.progress.nextStep.toUpperCase() as NextStep,
           tags: aiResponse.progress.tags.map(tag => tag.toUpperCase() as ResponseTag),
           difficulty: aiResponse.analytics?.difficulty?.toUpperCase() as Difficulty || null,
           reasoningSignals: aiResponse.analytics?.reasoningSignals || []
         }
       });
+      } // Fin del else (ANSWER/OFFTOPIC)
 
-      // Actualizar agregados de la sesión
-      const newMastery = Math.max(0, Math.min(1,
-        lessonSession.aggregateMastery + aiResponse.progress.masteryDelta
-      ));
+      // Solo actualizar mastery y progreso si NO es CLARIFY
+      const updatedTargetMasteries = { ...targetMasteries };
+      let newGlobalMastery = lessonSession.masteryGlobal;
+      const completedTargets = lessonSession.completedTargets || [];
+      let newConsecutive = lessonSession.consecutiveCorrect;
+      let newAttemptsInCurrent = lessonSession.attemptsInCurrent;
 
-      const newConsecutive = isCorrect
-        ? lessonSession.consecutiveCorrect + 1
-        : 0;
+      if (aiResponse.turnIntent !== 'CLARIFY') {
+        // Solo actualizar si NO es aclaración
+        if (currentTarget) {
+          const newTargetMastery = clamp(
+            currentTargetMastery + correctedMasteryDelta,
+            0,
+            1
+          );
+          updatedTargetMasteries[currentTarget.id] = newTargetMastery;
 
-      // Construir nuevo session summary con la función mejorada
+          // console.log(`[SOPHIA] Target ${currentTarget.id} mastery: ${(currentTargetMastery * 100).toFixed(0)}% → ${(newTargetMastery * 100).toFixed(0)}% (Δ ${(correctedMasteryDelta * 100).toFixed(0)}%`);
+        }
+
+        // Calcular mastery global ponderado
+        const targetWeights: Record<number, number> = {};
+        lesson.targets?.forEach(t => {
+          targetWeights[t.id] = t.weight || 1;
+        });
+        newGlobalMastery = calculateGlobalMastery(updatedTargetMasteries, targetWeights);
+
+        // Determinar targets completados
+        if (currentTarget && updatedTargetMasteries[currentTarget.id] >= currentTarget.minMastery) {
+          if (!completedTargets.includes(currentTarget.id)) {
+            completedTargets.push(currentTarget.id);
+            // console.log(`[SOPHIA] ✓ Target ${currentTarget.id} completado! Alcanzó ${(currentTarget.minMastery * 100).toFixed(0)}% requerido`);
+          }
+        }
+
+        const isCorrect = aiResponse.progress.tags.includes('CORRECT');
+        newConsecutive = isCorrect
+          ? lessonSession.consecutiveCorrect + 1
+          : 0;
+
+        // Incrementar intentos solo en turnos evaluados
+        newAttemptsInCurrent = lessonSession.attemptsInCurrent + 1;
+      } // Fin del if (turnIntent !== 'CLARIFY')
+
+      // Construir nuevo session summary con targetMastery real
       const updatedSummary = buildSessionSummary({
         lesson,
         session: {
           currentMomentId: actualMomentId,
-          aggregateMastery: newMastery,
-          attemptsInCurrent: lessonSession.attemptsInCurrent + 1,
+          aggregateMastery: newGlobalMastery,
+          attemptsInCurrent: newAttemptsInCurrent,
           consecutiveCorrect: newConsecutive,
-          lastMasteryDelta: aiResponse.progress.masteryDelta,
+          lastMasteryDelta: correctedMasteryDelta,
           lastTags: aiResponse.progress.tags,
-          nextStepHint: lessonSession.nextStepHint
+          nextStepHint: lessonSession.nextStepHint,
+          // Campos reales de targets
+          currentTargetId: currentTarget?.id,
+          targetMastery: updatedTargetMasteries,
+          completedTargets: completedTargets
         },
         lastSR: {
           question: input.questionShown,
           studentAnswer: input.studentAnswer
         },
         lastAI: {
-          progress: aiResponse.progress,
-          analytics: aiResponse.analytics,
+          progress: {
+            ...aiResponse.progress,
+            masteryDelta: correctedMasteryDelta
+          },
+          analytics: {
+            ...aiResponse.analytics,
+            // Agregar MODE:CLARIFY si es turno de aclaración
+            reasoningSignals: aiResponse.turnIntent === 'CLARIFY'
+              ? [...(aiResponse.analytics?.reasoningSignals || []), 'MODE:CLARIFY']
+              : aiResponse.analytics?.reasoningSignals
+          },
           chat: aiResponse.chat
         }
       });
 
-      // Lógica de transición entre momentos (Hito 3)
+      // Debug: Ver el nuevo formato del sessionSummary
+      // console.log('[SOPHIA] SessionSummary actualizado:\n', updatedSummary);
+
+      // Lógica de transición entre momentos basada en targets
       let newCurrentMomentId = lessonSession.currentMomentId;
+      let newCurrentTargetId = lessonSession.currentTargetId || currentTarget?.id;
       const newCompletedMoments = [...lessonSession.completedMoments];
-      let newAttemptsInCurrent = lessonSession.attemptsInCurrent + 1;
       let isCompleted = lessonSession.isCompleted;
 
       const totalMoments = lesson.moments?.length || 1;
       const nextStep = aiResponse.progress.nextStep.toUpperCase();
 
+      // Decidir avance basado en mastery del target
+      const shouldAdvance = currentTarget &&
+        updatedTargetMasteries[currentTarget.id] >= currentTarget.minMastery;
+
       // Aplicar reglas de transición
-      if (nextStep === 'ADVANCE') {
+      if (nextStep === 'ADVANCE' || shouldAdvance) {
         // Marcar momento actual como completado si no lo está
         if (!newCompletedMoments.includes(lessonSession.currentMomentId)) {
           newCompletedMoments.push(lessonSession.currentMomentId);
@@ -286,6 +456,10 @@ export async function processSophiaTurn(
         if (lessonSession.currentMomentId < totalMoments - 1) {
           newCurrentMomentId = lessonSession.currentMomentId + 1;
           newAttemptsInCurrent = 0; // Reset intentos
+
+          // Actualizar target activo
+          const nextMoment = lesson.moments?.find(m => m.id === newCurrentMomentId);
+          newCurrentTargetId = nextMoment?.primaryTargetId;
         } else {
           // Último momento + ADVANCE = completado
           isCompleted = true;
@@ -314,22 +488,38 @@ export async function processSophiaTurn(
         }
       }
 
+      // Determinar si hubo respuesta correcta (para conteo)
+      const wasCorrectAnswer = aiResponse.turnIntent !== 'CLARIFY' &&
+                              aiResponse.progress.tags.includes('CORRECT');
+
       await tx.lessonSession.update({
         where: { id: lessonSession.id },
         data: {
           currentMomentId: newCurrentMomentId,
+          currentTargetId: newCurrentTargetId,
           completedMoments: newCompletedMoments,
+          completedTargets: completedTargets,
           attemptsInCurrent: newAttemptsInCurrent,
           isCompleted,
-          aggregateMastery: newMastery,
-          lastMasteryDelta: aiResponse.progress.masteryDelta,
+          aggregateMastery: newGlobalMastery,
+          masteryGlobal: newGlobalMastery,
+          targetMastery: updatedTargetMasteries,
+          lastMasteryDelta: correctedMasteryDelta,
           consecutiveCorrect: newConsecutive,
           lastTags: aiResponse.progress.tags.map(tag => tag.toUpperCase() as ResponseTag),
           lastDifficulty: aiResponse.analytics?.difficulty?.toUpperCase() as Difficulty || null,
           nextStepHint: aiResponse.progress.nextStep,
           sessionSummary: updatedSummary,
-          totalAttempts: lessonSession.totalAttempts + 1,
-          correctAnswers: lessonSession.correctAnswers + (isCorrect ? 1 : 0),
+          // Nuevos campos para tracking de aclaraciones
+          lastQuestionShown: input.questionShown, // Guardar última pregunta
+          clarifyTurns: aiResponse.turnIntent === 'CLARIFY'
+            ? lessonSession.clarifyTurns + 1
+            : lessonSession.clarifyTurns,
+          // Solo incrementar totalAttempts si NO es CLARIFY
+          totalAttempts: aiResponse.turnIntent !== 'CLARIFY'
+            ? lessonSession.totalAttempts + 1
+            : lessonSession.totalAttempts,
+          correctAnswers: lessonSession.correctAnswers + (wasCorrectAnswer ? 1 : 0),
           lastAccessedAt: new Date()
         }
       });
@@ -339,7 +529,7 @@ export async function processSophiaTurn(
         data: {
           sessionId: lessonSession.id,
           role: 'assistant',
-          content: personalizedMessage, // Usar mensaje personalizado
+          content: finalMessage, // Usar mensaje final con guard
           momentId: actualMomentId,
           sequence: nextSequence + 1
         }
@@ -347,18 +537,18 @@ export async function processSophiaTurn(
 
       return {
         sessionId: lessonSession.id,
-        responseId: studentResponse.id,
-        aiOutcomeId: aiOutcome.id
+        responseId: studentResponse?.id || '',
+        aiOutcomeId: aiOutcome?.id || ''
       };
     });
 
 
-    // Actualizar el response con el mensaje personalizado
+    // Actualizar el response con el mensaje final
     const enhancedResponse = {
       ...aiResponse,
       chat: {
         ...aiResponse.chat,
-        message: personalizedMessage
+        message: finalMessage
       }
     };
 
@@ -436,6 +626,7 @@ export async function initSophiaSession(lessonId: string): Promise<ProcessSophia
         ok: true,
         data: {
           aiResponse: {
+            turnIntent: 'ANSWER' as const,
             chat: {
               message: 'Continuemos con la lección donde quedamos.',
               hints: []
@@ -452,7 +643,11 @@ export async function initSophiaSession(lessonId: string): Promise<ProcessSophia
       };
     }
 
-    // Crear nueva sesión
+    // Obtener el primer target de la lección
+    const firstMoment = lesson.moments?.[0];
+    const firstTarget = lesson.targets?.find(t => t.id === firstMoment?.primaryTargetId);
+
+    // Crear nueva sesión con target inicial
     const sessionNumber = await getNextSessionNumber(userId, lessonId);
     const newSession = await prisma.lessonSession.create({
       data: {
@@ -460,8 +655,12 @@ export async function initSophiaSession(lessonId: string): Promise<ProcessSophia
         lessonId,
         sessionNumber,
         currentMomentId: 0,
+        currentTargetId: firstTarget?.id,
         completedMoments: [],
+        completedTargets: [],
+        targetMastery: {}, // Inicializar vacío
         aggregateMastery: 0.5,
+        masteryGlobal: 0.0,
         consecutiveCorrect: 0,
         attemptsInCurrent: 0,
         sessionSummary: 'Primera interacción con la lección.',
@@ -470,10 +669,12 @@ export async function initSophiaSession(lessonId: string): Promise<ProcessSophia
     });
 
     // Construir contexto especial para inicio
+    const initialSummary = `Inicio de lección "${lesson.title}". Target: ${firstTarget?.title || 'Sin definir'}. Sin interacciones previas.`;
+
     const turnContext = buildTurnPayload({
       lesson,
       momentId: 0,
-      sessionSummary: 'Primera interacción con la lección.',
+      sessionSummary: initialSummary,
       questionShown: '', // Sin pregunta previa
       studentAnswer: '', // Sin respuesta previa
       aggregateMastery: 0.5,

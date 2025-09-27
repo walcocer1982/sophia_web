@@ -2,7 +2,6 @@
 
 import { Card, CardHeader, CardTitle } from "@/components/ui/card"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { Progress } from "@/components/ui/progress"
 import { LoadingState } from "@/components/ui/loading-state"
 import { HoverLift } from "@/components/ui/micro-interactions"
 import { ChevronDown, ChevronLeft, RefreshCw } from "lucide-react"
@@ -28,10 +27,15 @@ export function LessonDetails({ lesson, onDebugRefresh }: LessonDetailsProps) {
   const [debugInfo, setDebugInfo] = useState<{
     sessionId?: string
     currentMomentId?: number | null
+    currentTargetId?: number | null
     mastery?: number | null
+    masteryGlobal?: number | null
+    targetMastery?: Record<number, number> | null
+    completedTargets?: number[]
     lastMasteryDelta?: number | null
     tags?: string[]
     nextStep?: string | null
+    sessionSummary?: string
     updatedAt?: string
   } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -90,8 +94,6 @@ export function LessonDetails({ lesson, onDebugRefresh }: LessonDetailsProps) {
       </div>
     )
   }
-
-  const progressPercentage = 0 // Por ahora sin progreso
 
   return (
     <div className="p-4 space-y-4">
@@ -185,11 +187,18 @@ export function LessonDetails({ lesson, onDebugRefresh }: LessonDetailsProps) {
                     ✅ Sesión: {debugInfo.sessionId || 'N/A'}
                   </div>
                   <div className="font-semibold text-blue-600 dark:text-blue-400">
-                    🎯 Momento: {debugInfo.currentMomentId !== null ? `M${debugInfo.currentMomentId}` : 'Inicio'}
+                    🎯 Momento: {debugInfo.currentMomentId !== null ? `M${debugInfo.currentMomentId}` : 'Inicio'} | Target: {debugInfo.currentTargetId !== null ? `T${debugInfo.currentTargetId}` : 'N/A'}
                   </div>
                   <div className="font-semibold">
-                    📊 Mastery: {debugInfo.mastery !== null && debugInfo.mastery !== undefined ? `${Math.round(debugInfo.mastery * 100)}%` : '0%'}
+                    📊 Mastery Global: {debugInfo.masteryGlobal !== null && debugInfo.masteryGlobal !== undefined ? `${Math.round(debugInfo.masteryGlobal * 100)}%` : '0%'}
                   </div>
+                  {debugInfo.targetMastery && Object.keys(debugInfo.targetMastery).length > 0 && (
+                    <div className="text-xs font-mono">
+                      Targets: {Object.entries(debugInfo.targetMastery).map(([tId, mastery]) =>
+                        `T${tId}:${Math.round(mastery * 100)}%${debugInfo.completedTargets?.includes(parseInt(tId)) ? '✓' : ''}`
+                      ).join(' | ')}
+                    </div>
+                  )}
                   <div className={`font-semibold ${(debugInfo.lastMasteryDelta ?? 0) > 0 ? 'text-green-600' : (debugInfo.lastMasteryDelta ?? 0) < 0 ? 'text-red-600' : 'text-gray-500'}`}>
                     Δ Delta: {debugInfo.lastMasteryDelta !== null && debugInfo.lastMasteryDelta !== undefined ? `${debugInfo.lastMasteryDelta > 0 ? '+' : ''}${(debugInfo.lastMasteryDelta * 100).toFixed(1)}%` : 'N/A'}
                   </div>
@@ -199,6 +208,16 @@ export function LessonDetails({ lesson, onDebugRefresh }: LessonDetailsProps) {
                   <div className="font-semibold text-amber-600 dark:text-amber-400">
                     ⏭️ Next: {debugInfo.nextStep || 'N/A'}
                   </div>
+                  {debugInfo.sessionSummary && (
+                    <div className="mt-2 pt-2 border-t border-gray-300 dark:border-gray-700">
+                      <div className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 mb-1">
+                        📋 Session Summary:
+                      </div>
+                      <div className="text-[10px] leading-relaxed whitespace-pre-wrap break-words font-mono bg-black/5 dark:bg-white/5 p-2 rounded">
+                        {debugInfo.sessionSummary}
+                      </div>
+                    </div>
+                  )}
                   <div className="text-gray-500 text-[10px] pt-2 border-t border-gray-300 dark:border-gray-700">
                     Actualizado: {debugInfo.updatedAt ? new Date(debugInfo.updatedAt).toLocaleTimeString('es-PE') : 'N/A'}
                   </div>
@@ -214,7 +233,7 @@ export function LessonDetails({ lesson, onDebugRefresh }: LessonDetailsProps) {
       </HoverLift>
 
       {/* Progress Summary at bottom */}
-      <div className="p-4 bg-muted/30 rounded-lg border">
+      {/* <div className="p-4 bg-muted/30 rounded-lg border">
         <div className="flex items-center justify-between mb-3">
           <span className="ds-text-body-sm font-medium">Progreso General</span>
           <span className="ds-text-caption text-muted-foreground tabular-nums">
@@ -222,7 +241,7 @@ export function LessonDetails({ lesson, onDebugRefresh }: LessonDetailsProps) {
           </span>
         </div>
         <Progress value={progressPercentage} className="h-2.5 bg-muted-foreground/10" />
-      </div>
+      </div> */}
     </div>
   )
 }

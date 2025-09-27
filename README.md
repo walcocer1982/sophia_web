@@ -47,6 +47,43 @@ Aplicación educativa con **Next.js 15.5 (App Router)**, **Server Actions**, **N
 * Rate-limit **básico** (opcional) en acciones de chat para evitar abuso.
 * CSP y headers de seguridad recomendados en `next.config.ts` (ver sección más abajo).
 
+## Sistema de Tutora IA - SOPHIA
+
+### Comportamiento actual
+
+SOPHIA es una tutora virtual integrada con GPT-4o-mini que evalúa y guía a estudiantes en lecciones de seguridad industrial (IPERC). Su comportamiento se basa en:
+
+* **Evaluación por targets**: Cada lección tiene targets (competencias) con rúbricas de 5 niveles (Inicial, Básico, Competente, Avanzado, Dominio)
+* **Mastery tracking**: Sistema de maestría de 0 a 1 que determina el progreso del estudiante por cada target
+* **Respuestas estructuradas**: Usa JSON Schema estricto para garantizar consistencia en evaluación y feedback
+* **Detección de intención**: Clasifica cada turno como ANSWER (respuesta), CLARIFY (aclaración) o OFFTOPIC
+* **Pedagogía adaptativa**: Ajusta dificultad y hints según nivel de dominio del estudiante
+
+### Flujo de interacción
+
+1. **Inicio de sesión**: Al crear nueva sesión, SOPHIA presenta objetivos y formula primera pregunta
+2. **Evaluación continua**: Cada respuesta se evalúa contra la rúbrica del target activo
+3. **Clarificaciones sin penalización**: Preguntas de aclaración no afectan el mastery ni cuentan como intentos
+4. **Transición automática**: Avanza al siguiente momento cuando se alcanza el minMastery del target
+5. **Memoria contextual**: Mantiene sessionSummary con estado, evidencias, brechas y plan pedagógico
+
+### Historias de usuario - Interacción Estudiante-SOPHIA
+
+**HU-01: Inicio de lección nueva**. Como estudiante, al iniciar una lección nueva recibo una bienvenida personalizada con mi nombre, los objetivos de aprendizaje presentados de forma clara, y una primera pregunta contextualizada que evalúa mis conocimientos previos, permitiéndome comenzar el aprendizaje de forma inmediata sin navegación adicional.
+
+**HU-02: Responder pregunta evaluativa**. Como estudiante, cuando respondo una pregunta de SOPHIA, recibo feedback inmediato que reconoce mis aciertos específicos, señala claramente qué aspectos debo mejorar con ejemplos concretos, y me proporciona hints graduales si necesito ayuda, todo mientras veo mi progreso visual actualizado en tiempo real.
+
+**HU-03: Solicitar aclaración de conceptos**. Como estudiante, cuando no entiendo un término o concepto puedo preguntar "¿qué es X?" o expresar mi confusión, y SOPHIA me proporciona una explicación breve y contextualizada sin penalizar mi progreso, manteniendo la misma pregunta activa para que pueda responder cuando esté listo.
+
+**HU-04: Recuperar sesión interrumpida**. Como estudiante, cuando regreso a una lección incompleta, SOPHIA me recibe con un resumen de dónde quedé, qué hemos cubierto y qué falta por aprender, permitiéndome continuar exactamente desde el último punto sin perder contexto ni progreso.
+
+**HU-05: Recibir ayuda adaptativa**. Como estudiante con dificultades, cuando fallo múltiples intentos en un concepto, SOPHIA detecta mi patrón de errores y ajusta automáticamente su estrategia pedagógica, proporcionándome explicaciones más detalladas, ejemplos adicionales y preguntas más simples para construir comprensión gradual.
+
+**HU-06: Completar target de aprendizaje**. Como estudiante, cuando alcanzo el dominio requerido de un target específico, recibo reconocimiento explícito de mi logro con un resumen de lo aprendido, y SOPHIA transiciona suavemente al siguiente desafío manteniendo mi motivación y momentum de aprendizaje.
+
+**HU-07: Navegación off-topic**. Como estudiante, si envío mensajes no relacionados con la lección como saludos o comentarios casuales, SOPHIA responde cortésmente pero me redirige de vuelta al contenido educativo, manteniendo el foco en el aprendizaje sin ser autoritaria o desagradable.
+
+**HU-08: Visualizar progreso detallado**. Como estudiante, puedo ver en todo momento mi nivel de mastery por cada target, cuántos intentos he realizado, qué targets he completado, y cuánto me falta para completar la lección, dándome control y transparencia sobre mi proceso de aprendizaje.
 
 ## Server UP in dev mode:
 - .env

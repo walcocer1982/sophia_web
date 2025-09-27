@@ -72,15 +72,7 @@ export function LessonDetails({ lesson, onDebugRefresh }: LessonDetailsProps) {
     }
   }, [fetchDebugInfo, onDebugRefresh])
 
-  // Auto-refresh every 3 seconds when there's an active session
-  useEffect(() => {
-    if (debugInfo?.sessionId) {
-      const interval = setInterval(() => {
-        fetchDebugInfo()
-      }, 3000)
-      return () => clearInterval(interval)
-    }
-  }, [debugInfo?.sessionId, fetchDebugInfo])
+  // Removed auto-refresh - now only updates on SOPHIA responses via event listener
   if (!lesson) {
     return (
       <div className="p-4">

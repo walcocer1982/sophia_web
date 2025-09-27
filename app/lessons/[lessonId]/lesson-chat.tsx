@@ -77,7 +77,7 @@ export default function LessonChat({
       if (result.ok && result.data) {
         setSessionId(result.data.sessionId)
 
-        // Agregar mensaje de bienvenida
+        // Agregar mensaje de bienvenida generado por IA
         const welcomeMessage: ChatMessageType = {
           id: `sophia-init`,
           message: result.data.aiResponse.chat.message,

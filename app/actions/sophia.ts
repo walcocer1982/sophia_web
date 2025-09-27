@@ -2,20 +2,21 @@
 
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import OpenAI from 'openai';
-import {
-  LessonAIResponseJSONSchema,
-  safeValidateAIResponse,
-  type LessonAIResponseT
-} from '@/lib/ai/schemas';
-import { buildTurnPayload } from '@/lib/ai/build-context';
-import { buildSessionSummary } from '@/lib/ai/build-sessionSummary';
-import { SOPHIA_SYSTEM_PROMPT } from '@/lib/ai/system-prompt';
 import { getLessonById } from '@/data_lessons';
-import { analyzeStudentProfile, generatePedagogicalRecommendations, personalizeFeedback } from '@/lib/ai/pedagogical-analytics';
-import type { ResponseTag, NextStep, Difficulty } from '@prisma/client';
-import { calculateGlobalMastery, clamp, validateAndCorrectMasteryDelta, masteryToLevel } from '@/lib/ai/mapping';
+
+// Importar desde el módulo de IA unificado
+import {
+  processTurn,
+  type PromptSlots,
+  type LessonAIResponseT
+} from '@/lib/ai';
+
+// Importar utilidades auxiliares
 import { detectTurnIntent, extractClarificationTerm } from '@/lib/ai/clarification-utils';
+import { analyzeStudentProfile, generatePedagogicalRecommendations, personalizeFeedback } from '@/lib/ai/pedagogical-analytics';
+import { calculateGlobalMastery, clamp, validateAndCorrectMasteryDelta } from '@/lib/ai/mapping';
+
+import type { ResponseTag, NextStep, Difficulty, Prisma } from '@prisma/client';
 
 /**
  * Input para el server action
@@ -43,28 +44,28 @@ interface ProcessSophiaTurnResult {
 
 /**
  * Server Action principal para procesar un turno con SOPHIA
- * Incluye llamada a OpenAI + persistencia transaccional
+ * Ahora es un orquestador delgado que delega al módulo de IA
  */
 export async function processSophiaTurn(
   input: ProcessSophiaTurnInput
 ): Promise<ProcessSophiaTurnResult> {
   try {
-    // 1. Verificar autenticación
-    const userSession = await auth();
+    // ========== 1. VALIDACIÓN Y CARGA DE DATOS ==========
 
+    const userSession = await auth();
     if (!userSession?.user?.id) {
       return { ok: false, error: 'Usuario no autenticado. Por favor inicia sesión.' };
     }
 
     const userId = userSession.user.id;
 
-    // 2. Cargar lección (desde TypeScript, no DB por ahora)
+    // Cargar lección
     const lesson = getLessonById(parseInt(input.lessonId));
     if (!lesson) {
       return { ok: false, error: 'Lección no encontrada' };
     }
 
-    // 3. Obtener sesión existente
+    // Obtener sesión activa
     const lessonSession = await prisma.lessonSession.findFirst({
       where: {
         userId,
@@ -78,96 +79,60 @@ export async function processSophiaTurn(
       return { ok: false, error: 'No hay sesión activa. Por favor inicia la lección primero.' };
     }
 
-    // 4. Construir contexto para IA
-    // Usar el momento actual de la sesión en lugar del enviado (Hito 3)
     const actualMomentId = lessonSession.currentMomentId;
-
-    // Obtener el target activo del momento actual
     const currentMoment = lesson.moments?.find(m => m.id === actualMomentId);
     const currentTarget = lesson.targets?.find(t => t.id === currentMoment?.primaryTargetId);
 
-    // Obtener targetMastery actual desde la sesión
+    // Obtener mastery por target
     const targetMasteries = (lessonSession.targetMastery as Record<number, number>) || {};
     const currentTargetMastery = currentTarget ? (targetMasteries[currentTarget.id] || 0.5) : 0.5;
 
-    // console.log(`[SOPHIA] Momento: ${actualMomentId}, Target: ${currentTarget?.id} - ${currentTarget?.title}, Mastery actual: ${(currentTargetMastery * 100).toFixed(0)}%`);
+    // ========== 2. PREPARAR SLOTS PARA EL MÓDULO DE IA ==========
 
-    const turnContext = buildTurnPayload({
-      lesson,
-      momentId: actualMomentId,
+    const promptSlots: PromptSlots = {
+      lessonTitle: lesson.title,
+      momentTitle: currentMoment?.title || 'Momento no encontrado',
+      momentGoal: currentMoment?.goal || '',
+      targetInfo: currentTarget ? {
+        id: currentTarget.id,
+        title: currentTarget.title,
+        minMastery: currentTarget.minMastery,
+        currentMastery: currentTargetMastery
+      } : undefined,
+      aggregateMastery: lessonSession.aggregateMastery,
+      consecutiveCorrect: lessonSession.consecutiveCorrect,
+      attemptsInCurrent: lessonSession.attemptsInCurrent,
       sessionSummary: lessonSession.sessionSummary || undefined,
       questionShown: input.questionShown,
       studentAnswer: input.studentAnswer,
-      aggregateMastery: lessonSession.aggregateMastery,
-      consecutiveCorrect: lessonSession.consecutiveCorrect,
-      targetMastery: targetMasteries // Pasar el mastery real por target
-    });
+      // TODO: Agregar recentTurns cuando tengamos tiempo
+    };
 
-    // 5. Llamar a OpenAI con structured output
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY
-    });
+    // ========== 3. LLAMAR AL MÓDULO DE IA ==========
 
-    // Ajustar temperatura basada en el estado del estudiante
-    // Más determinístico para estudiantes con dificultades, más creativo para avanzados
-    const temperature = lessonSession.aggregateMastery < 0.4 ? 0.5 :
-                       lessonSession.aggregateMastery < 0.7 ? 0.6 : 0.7;
+    const turnResult = await processTurn(
+      promptSlots,
+      lessonSession.sessionSummary || undefined
+    );
 
+    const aiResponse = turnResult.aiResponse;
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: SOPHIA_SYSTEM_PROMPT },
-        { role: 'user', content: turnContext }
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'lesson_ai_response',
-          strict: true,
-          schema: LessonAIResponseJSONSchema
-        }
-      } as Parameters<typeof openai.chat.completions.create>[0]['response_format'],
-      temperature,
-      max_tokens: 600 // Aumentado para permitir feedback más rico
-    });
+    // ========== 4. POST-PROCESAMIENTO: FALLBACK DE CLARIFICATION ==========
 
-    const responseContent = completion.choices[0]?.message?.content;
-    if (!responseContent) {
-      return { ok: false, error: 'Respuesta vacía de OpenAI' };
-    }
-
-
-    // 6. Parsear y validar respuesta
-    const jsonResponse = JSON.parse(responseContent);
-    const validationResult = safeValidateAIResponse(jsonResponse);
-
-
-    if (!validationResult.success) {
-      return { ok: false, error: 'Respuesta de IA no válida' };
-    }
-
-    const aiResponse = validationResult.data;
-
-    // 6.5. Aplicar heurística de fallback para turnIntent si es necesario
     const detectedIntent = detectTurnIntent(input.studentAnswer);
 
-    // Si nuestra heurística detecta CLARIFY pero la IA no lo marcó, forzar corrección
     if (detectedIntent === 'CLARIFY' && aiResponse.turnIntent !== 'CLARIFY') {
-      // console.log('[SOPHIA] Fallback: Forzando turnIntent=CLARIFY (detectado por heurística)');
-
       // Forzar valores apropiados para aclaración
       aiResponse.turnIntent = 'CLARIFY';
       aiResponse.progress.masteryDelta = 0;
       aiResponse.progress.nextStep = 'RETRY';
 
       // Asegurar tags apropiados
-      if (!aiResponse.progress.tags.includes('NEEDS_HELP') &&
-          !aiResponse.progress.tags.includes('CONCEPTUAL')) {
+      if (!aiResponse.progress.tags.includes('NEEDS_HELP')) {
         aiResponse.progress.tags = ['NEEDS_HELP'];
       }
 
-      // Agregar señal de MODE:CLARIFY si no está
+      // Agregar señal de MODE:CLARIFY
       if (aiResponse.analytics && !aiResponse.analytics.reasoningSignals?.includes('MODE:CLARIFY')) {
         if (!aiResponse.analytics.reasoningSignals) {
           aiResponse.analytics.reasoningSignals = [];
@@ -175,36 +140,27 @@ export async function processSophiaTurn(
         aiResponse.analytics.reasoningSignals.push('MODE:CLARIFY');
       }
 
-      // Extraer término de aclaración si es posible
       const term = extractClarificationTerm(input.studentAnswer);
       if (term) {
-        // console.log(`[SOPHIA] Término a aclarar detectado: "${term}"`);
       }
     }
 
-    // Log de decisión final
-    // console.log(`[SOPHIA] turnIntent final: ${aiResponse.turnIntent} (heurística: ${detectedIntent}`);
+    // ========== 5. PERSONALIZACIÓN DE FEEDBACK ==========
 
-    // 7. Analizar historial para personalización (si existe suficiente data)
-    let personalizedMessage = aiResponse.chat.message;
+    let finalMessage = aiResponse.chat.message;
 
-    // Obtener historial de respuestas del estudiante en esta sesión
+    // Obtener historial para personalización
     const studentHistory = await prisma.studentResponse.findMany({
       where: { sessionId: lessonSession.id },
-      orderBy: { answeredAt: 'asc' },
-      include: {
-        // Por ahora no incluimos aiOutcome en el include
-        // TODO: Actualizar cuando tengamos relación correcta
-      }
+      orderBy: { answeredAt: 'asc' }
     });
 
-    // Si hay al menos 3 respuestas previas, personalizar el feedback
     if (studentHistory.length >= 3) {
       const historyData = studentHistory.map(sr => ({
-        tags: [], // TODO: obtener tags de AIOutcome cuando esté relacionado
+        tags: [],
         isCorrect: sr.isCorrect,
         momentId: sr.momentId,
-        masteryDelta: 0 // TODO: obtener masteryDelta de AIOutcome
+        masteryDelta: 0
       }));
 
       const studentProfile = analyzeStudentProfile(historyData);
@@ -217,401 +173,226 @@ export async function processSophiaTurn(
         currentPerformance
       );
 
-      // Personalizar el mensaje basado en el perfil
-      personalizedMessage = personalizeFeedback(
+      finalMessage = personalizeFeedback(
         aiResponse.chat.message,
         studentProfile,
         recommendations
       );
-
     }
 
-    // 8. Guard de consigna para CLARIFY - mantener misma pregunta
-    let finalMessage = personalizedMessage;
+    // Guard de consigna para CLARIFY
     const lastQuestionShown = lessonSession.lastQuestionShown || input.questionShown;
-
     if (aiResponse.turnIntent === 'CLARIFY') {
-      // Extraer la pregunta del mensaje de la IA
       const messageLines = finalMessage.split('\n');
       const lastLine = messageLines[messageLines.length - 1];
 
-      // Si la última línea no es la pregunta original, reemplazarla
       if (!lastLine.includes(lastQuestionShown.substring(0, 30))) {
-        // console.log('[SOPHIA] Guard de consigna: Forzando re-pregunta original');
-        // Mantener la explicación pero cambiar la pregunta final
         messageLines[messageLines.length - 1] = lastQuestionShown;
         finalMessage = messageLines.join('\n');
       }
     }
 
-    // 9. Persistir en transacción atómica CON ROUTER DE TURNO
+    // ========== 6. PERSISTENCIA TRANSACCIONAL ==========
 
     const result = await prisma.$transaction(async (tx) => {
-      // Obtener siguiente sequence para mensajes
+      // Determinar valores de evaluación
+      const isCorrect = aiResponse.progress.tags.includes('CORRECT');
+      const tags = aiResponse.progress.tags;
+      const isPartial = tags.includes('PARTIAL');
+
+      // 6.1 Crear mensaje del usuario
       const lastMessage = await tx.chatMessage.findFirst({
         where: { sessionId: lessonSession.id },
         orderBy: { sequence: 'desc' }
       });
-      const nextSequence = (lastMessage?.sequence || 0) + 1;
 
-      // Crear mensaje del usuario
       const userMessage = await tx.chatMessage.create({
         data: {
           sessionId: lessonSession.id,
           role: 'user',
           content: input.studentAnswer,
           momentId: actualMomentId,
-          sequence: nextSequence
+          sequence: (lastMessage?.sequence || 0) + 1
         }
       });
 
-      // ROUTER DEL TURNO - Crear StudentResponse según turnIntent
-      let studentResponse = null;
-      let aiOutcome = null;
-      let correctedMasteryDelta = 0;
-
-      if (aiResponse.turnIntent === 'CLARIFY') {
-        // RUTA CLARIFY: NO evaluar, NO cambiar mastery, NO incrementar intentos
-        // console.log('[SOPHIA] Turno CLARIFY: Saltando evaluación y preservando estado');
-
-        // Crear StudentResponse mínimo marcado como no evaluado
-        studentResponse = await tx.studentResponse.create({
-          data: {
-            sessionId: lessonSession.id,
-            messageId: userMessage.id,
-            momentId: actualMomentId,
-            targetId: currentTarget?.id,
-            question: input.questionShown,
-            studentAnswer: input.studentAnswer,
-            isEvaluated: false, // IMPORTANTE: Marcar como no evaluado
-            isCorrect: false, // Valor por defecto, no se usa
-            score: 0, // Sin puntuación
-            feedback: finalMessage,
-            hintsGiven: [],
-            attempt: lessonSession.attemptsInCurrent // NO incrementar
-          }
-        });
-
-        // NO crear AIOutcome para CLARIFY
-
-      } else {
-        // RUTA ANSWER/OFFTOPIC: Flujo normal de evaluación
-        const isCorrect = aiResponse.progress.tags.includes('CORRECT');
-        const score = isCorrect ? 0.8 + aiResponse.progress.masteryDelta : 0.3 + aiResponse.progress.masteryDelta;
-
-        studentResponse = await tx.studentResponse.create({
-          data: {
-            sessionId: lessonSession.id,
-            messageId: userMessage.id,
-            momentId: actualMomentId,
-            targetId: currentTarget?.id,
-            question: input.questionShown,
-            studentAnswer: input.studentAnswer,
-            isEvaluated: true, // Se evalúa normalmente
-            isCorrect,
-            score: Math.max(0, Math.min(1, score)),
-            feedback: finalMessage,
-            hintsGiven: aiResponse.chat.hints || [],
-            attempt: lessonSession.attemptsInCurrent + 1
-          }
-        });
-
-        // Validar y corregir masteryDelta según el nivel
-        const inferredLevel = masteryToLevel(currentTargetMastery);
-        const validation = validateAndCorrectMasteryDelta(
-          inferredLevel,
-          aiResponse.progress.tags.map(tag => tag.toUpperCase() as ResponseTag),
-          aiResponse.progress.masteryDelta
-        );
-
-        if (!validation.isValid) {
-          // console.log(`[SOPHIA] Corrigiendo masteryDelta: ${validation.reason}`);
+      // 6.2 Crear respuesta del estudiante
+      const studentResponse = await tx.studentResponse.create({
+        data: {
+          sessionId: lessonSession.id,
+          messageId: userMessage.id,
+          momentId: actualMomentId,
+          targetId: currentTarget?.id,
+          question: input.questionShown,
+          studentAnswer: input.studentAnswer,
+          isEvaluated: true,
+          isCorrect,
+          score: isCorrect ? 1.0 : isPartial ? 0.5 : 0.0,
+          feedback: finalMessage,
+          hintsGiven: aiResponse.chat.hints || [],
+          attempt: lessonSession.attemptsInCurrent + 1
         }
+      });
 
-        correctedMasteryDelta = validation.correctedDelta;
-
-        // Crear AIOutcome solo para turnos evaluados
-        aiOutcome = await tx.aIOutcome.create({
+      // 6.3 Crear AIOutcome
+      const aiOutcome = await tx.aIOutcome.create({
         data: {
           sessionId: lessonSession.id,
           responseId: studentResponse.id,
           momentId: actualMomentId,
-          targetId: currentTarget?.id, // Agregar targetId
-          raw: jsonResponse,
-          aiMessage: finalMessage, // Usar mensaje final con guard
+          targetId: currentTarget?.id,
+          raw: turnResult.aiResponse as Prisma.InputJsonValue,
+          aiMessage: finalMessage,
           aiHints: aiResponse.chat.hints || [],
-          masteryDelta: correctedMasteryDelta, // Usar delta corregido
-          nextStep: aiResponse.progress.nextStep.toUpperCase() as NextStep,
-          tags: aiResponse.progress.tags.map(tag => tag.toUpperCase() as ResponseTag),
-          difficulty: aiResponse.analytics?.difficulty?.toUpperCase() as Difficulty || null,
+          masteryDelta: aiResponse.progress.masteryDelta,
+          nextStep: aiResponse.progress.nextStep as NextStep,
+          tags: aiResponse.progress.tags as ResponseTag[],
+          difficulty: aiResponse.analytics?.difficulty as Difficulty || null,
           reasoningSignals: aiResponse.analytics?.reasoningSignals || []
         }
       });
-      } // Fin del else (ANSWER/OFFTOPIC)
 
-      // Solo actualizar mastery y progreso si NO es CLARIFY
-      const updatedTargetMasteries = { ...targetMasteries };
-      let newGlobalMastery = lessonSession.masteryGlobal;
-      const completedTargets = lessonSession.completedTargets || [];
-      let newConsecutive = lessonSession.consecutiveCorrect;
-      let newAttemptsInCurrent = lessonSession.attemptsInCurrent;
-
-      if (aiResponse.turnIntent !== 'CLARIFY') {
-        // Solo actualizar si NO es aclaración
-        if (currentTarget) {
-          const newTargetMastery = clamp(
-            currentTargetMastery + correctedMasteryDelta,
-            0,
-            1
-          );
-          updatedTargetMasteries[currentTarget.id] = newTargetMastery;
-
-          // console.log(`[SOPHIA] Target ${currentTarget.id} mastery: ${(currentTargetMastery * 100).toFixed(0)}% → ${(newTargetMastery * 100).toFixed(0)}% (Δ ${(correctedMasteryDelta * 100).toFixed(0)}%`);
-        }
-
-        // Calcular mastery global ponderado
-        const targetWeights: Record<number, number> = {};
-        lesson.targets?.forEach(t => {
-          targetWeights[t.id] = t.weight || 1;
-        });
-        newGlobalMastery = calculateGlobalMastery(updatedTargetMasteries, targetWeights);
-
-        // Determinar targets completados
-        if (currentTarget && updatedTargetMasteries[currentTarget.id] >= currentTarget.minMastery) {
-          if (!completedTargets.includes(currentTarget.id)) {
-            completedTargets.push(currentTarget.id);
-            // console.log(`[SOPHIA] ✓ Target ${currentTarget.id} completado! Alcanzó ${(currentTarget.minMastery * 100).toFixed(0)}% requerido`);
-          }
-        }
-
-        const isCorrect = aiResponse.progress.tags.includes('CORRECT');
-        newConsecutive = isCorrect
-          ? lessonSession.consecutiveCorrect + 1
-          : 0;
-
-        // Incrementar intentos solo en turnos evaluados
-        newAttemptsInCurrent = lessonSession.attemptsInCurrent + 1;
-      } // Fin del if (turnIntent !== 'CLARIFY')
-
-      // Construir nuevo session summary con targetMastery real
-      const updatedSummary = buildSessionSummary({
-        lesson,
-        session: {
-          currentMomentId: actualMomentId,
-          aggregateMastery: newGlobalMastery,
-          attemptsInCurrent: newAttemptsInCurrent,
-          consecutiveCorrect: newConsecutive,
-          lastMasteryDelta: correctedMasteryDelta,
-          lastTags: aiResponse.progress.tags,
-          nextStepHint: lessonSession.nextStepHint,
-          // Campos reales de targets
-          currentTargetId: currentTarget?.id,
-          targetMastery: updatedTargetMasteries,
-          completedTargets: completedTargets
-        },
-        lastSR: {
-          question: input.questionShown,
-          studentAnswer: input.studentAnswer
-        },
-        lastAI: {
-          progress: {
-            ...aiResponse.progress,
-            masteryDelta: correctedMasteryDelta
-          },
-          analytics: {
-            ...aiResponse.analytics,
-            // Agregar MODE:CLARIFY si es turno de aclaración
-            reasoningSignals: aiResponse.turnIntent === 'CLARIFY'
-              ? [...(aiResponse.analytics?.reasoningSignals || []), 'MODE:CLARIFY']
-              : aiResponse.analytics?.reasoningSignals
-          },
-          chat: aiResponse.chat
-        }
-      });
-
-      // Debug: Ver el nuevo formato del sessionSummary
-      // console.log('[SOPHIA] SessionSummary actualizado:\n', updatedSummary);
-
-      // Lógica de transición entre momentos basada en targets
-      let newCurrentMomentId = lessonSession.currentMomentId;
-      let newCurrentTargetId = lessonSession.currentTargetId || currentTarget?.id;
-      const newCompletedMoments = [...lessonSession.completedMoments];
-      let isCompleted = lessonSession.isCompleted;
-
-      const totalMoments = lesson.moments?.length || 1;
-      const nextStep = aiResponse.progress.nextStep.toUpperCase();
-
-      // Decidir avance basado en mastery del target
-      const shouldAdvance = currentTarget &&
-        updatedTargetMasteries[currentTarget.id] >= currentTarget.minMastery;
-
-      // Aplicar reglas de transición
-      if (nextStep === 'ADVANCE' || shouldAdvance) {
-        // Marcar momento actual como completado si no lo está
-        if (!newCompletedMoments.includes(lessonSession.currentMomentId)) {
-          newCompletedMoments.push(lessonSession.currentMomentId);
-        }
-
-        // Avanzar al siguiente momento
-        if (lessonSession.currentMomentId < totalMoments - 1) {
-          newCurrentMomentId = lessonSession.currentMomentId + 1;
-          newAttemptsInCurrent = 0; // Reset intentos
-
-          // Actualizar target activo
-          const nextMoment = lesson.moments?.find(m => m.id === newCurrentMomentId);
-          newCurrentTargetId = nextMoment?.primaryTargetId;
-        } else {
-          // Último momento + ADVANCE = completado
-          isCompleted = true;
-        }
-      } else if (nextStep === 'COMPLETE') {
-        // Marcar lección como completada
-        if (!newCompletedMoments.includes(lessonSession.currentMomentId)) {
-          newCompletedMoments.push(lessonSession.currentMomentId);
-        }
-        isCompleted = true;
-      } else if (nextStep === 'REINFORCE' || nextStep === 'RETRY') {
-        // Permanecer en el momento actual
-        // Si hay demasiados intentos, forzar avance
-        if (newAttemptsInCurrent > 3) {
-          // Forzar avance después de 3 intentos
-          if (!newCompletedMoments.includes(lessonSession.currentMomentId)) {
-            newCompletedMoments.push(lessonSession.currentMomentId);
-          }
-
-          if (lessonSession.currentMomentId < totalMoments - 1) {
-            newCurrentMomentId = lessonSession.currentMomentId + 1;
-            newAttemptsInCurrent = 0;
-          } else {
-            isCompleted = true;
-          }
-        }
-      }
-
-      // Determinar si hubo respuesta correcta (para conteo)
-      const wasCorrectAnswer = aiResponse.turnIntent !== 'CLARIFY' &&
-                              aiResponse.progress.tags.includes('CORRECT');
-
-      await tx.lessonSession.update({
-        where: { id: lessonSession.id },
-        data: {
-          currentMomentId: newCurrentMomentId,
-          currentTargetId: newCurrentTargetId,
-          completedMoments: newCompletedMoments,
-          completedTargets: completedTargets,
-          attemptsInCurrent: newAttemptsInCurrent,
-          isCompleted,
-          aggregateMastery: newGlobalMastery,
-          masteryGlobal: newGlobalMastery,
-          targetMastery: updatedTargetMasteries,
-          lastMasteryDelta: correctedMasteryDelta,
-          consecutiveCorrect: newConsecutive,
-          lastTags: aiResponse.progress.tags.map(tag => tag.toUpperCase() as ResponseTag),
-          lastDifficulty: aiResponse.analytics?.difficulty?.toUpperCase() as Difficulty || null,
-          nextStepHint: aiResponse.progress.nextStep,
-          sessionSummary: updatedSummary,
-          // Nuevos campos para tracking de aclaraciones
-          lastQuestionShown: input.questionShown, // Guardar última pregunta
-          clarifyTurns: aiResponse.turnIntent === 'CLARIFY'
-            ? lessonSession.clarifyTurns + 1
-            : lessonSession.clarifyTurns,
-          // Solo incrementar totalAttempts si NO es CLARIFY
-          totalAttempts: aiResponse.turnIntent !== 'CLARIFY'
-            ? lessonSession.totalAttempts + 1
-            : lessonSession.totalAttempts,
-          correctAnswers: lessonSession.correctAnswers + (wasCorrectAnswer ? 1 : 0),
-          lastAccessedAt: new Date()
-        }
-      });
-
-      // Crear mensaje de SOPHIA
+      // 6.4 Crear mensaje del asistente
       await tx.chatMessage.create({
         data: {
           sessionId: lessonSession.id,
           role: 'assistant',
-          content: finalMessage, // Usar mensaje final con guard
+          content: finalMessage,
           momentId: actualMomentId,
-          sequence: nextSequence + 1
+          sequence: userMessage.sequence + 1
         }
       });
 
+      // 6.5 Actualizar sesión con router de intención
+      let updatedSession;
+
+      if (aiResponse.turnIntent === 'CLARIFY') {
+        // RAMA CLARIFY: no cambiar momento ni mastery
+        updatedSession = await tx.lessonSession.update({
+          where: { id: lessonSession.id },
+          data: {
+            clarifyTurns: { increment: 1 },
+            lastQuestionShown: input.questionShown,
+            sessionSummary: turnResult.newSummary,
+            lastAccessedAt: new Date()
+          }
+        });
+      } else {
+        // RAMA ANSWER: actualizar normalmente
+        const masteryDeltaResult = validateAndCorrectMasteryDelta(
+          currentTargetMastery,
+          tags as ResponseTag[],
+          aiResponse.progress.masteryDelta || 0
+        );
+        const masteryDelta = masteryDeltaResult.correctedDelta;
+
+        const newAggregateMastery = clamp(lessonSession.aggregateMastery + masteryDelta, 0, 1);
+        const newTargetMastery = currentTarget ?
+          clamp(currentTargetMastery + masteryDelta, 0, 1) :
+          currentTargetMastery;
+
+        // Actualizar mapa de mastery por target
+        if (currentTarget) {
+          targetMasteries[currentTarget.id] = newTargetMastery;
+        }
+
+        const newConsecutive = isCorrect ? lessonSession.consecutiveCorrect + 1 : 0;
+        const nextStep = aiResponse.progress.nextStep as NextStep;
+
+        // Determinar próximo momento
+        let nextMomentId = actualMomentId;
+        let isCompleted = false;
+        const completedTargets = [...(lessonSession.completedTargets || [])];
+
+        // Marcar target como completado si alcanza minMastery
+        if (currentTarget && newTargetMastery >= currentTarget.minMastery) {
+          if (!completedTargets.includes(currentTarget.id)) {
+            completedTargets.push(currentTarget.id);
+          }
+        }
+
+        if (nextStep === 'ADVANCE' && actualMomentId < lesson.moments.length - 1) {
+          nextMomentId = actualMomentId + 1;
+        } else if (nextStep === 'COMPLETE' || actualMomentId >= lesson.moments.length - 1) {
+          isCompleted = true;
+        }
+
+        updatedSession = await tx.lessonSession.update({
+          where: { id: lessonSession.id },
+          data: {
+            currentMomentId: nextMomentId,
+            currentTargetId: lesson.moments?.find(m => m.id === nextMomentId)?.primaryTargetId,
+            completedMoments: lessonSession.completedMoments.includes(actualMomentId) ?
+              lessonSession.completedMoments :
+              [...lessonSession.completedMoments, actualMomentId],
+            completedTargets,
+            attemptsInCurrent: nextMomentId !== actualMomentId ? 0 : lessonSession.attemptsInCurrent + 1,
+            isCompleted,
+            aggregateMastery: newAggregateMastery,
+            targetMastery: targetMasteries as Prisma.InputJsonValue,
+            masteryGlobal: calculateGlobalMastery(targetMasteries),
+            lastMasteryDelta: masteryDelta,
+            consecutiveCorrect: newConsecutive,
+            lastTags: tags as ResponseTag[],
+            lastDifficulty: aiResponse.analytics?.difficulty as Difficulty || null,
+            nextStepHint: aiResponse.chat.hints?.[0] || null,
+            sessionSummary: turnResult.newSummary,
+            lastQuestionShown: input.questionShown,
+            totalAttempts: { increment: 1 },
+            correctAnswers: isCorrect ? { increment: 1 } : undefined,
+            lastAccessedAt: new Date()
+          }
+        });
+      }
+
       return {
-        sessionId: lessonSession.id,
-        responseId: studentResponse?.id || '',
-        aiOutcomeId: aiOutcome?.id || ''
+        studentResponse,
+        aiOutcome,
+        session: updatedSession
       };
     });
 
-
-    // Actualizar el response con el mensaje final
-    const enhancedResponse = {
-      ...aiResponse,
-      chat: {
-        ...aiResponse.chat,
-        message: finalMessage
-      }
-    };
+    // ========== 7. RETORNAR RESULTADO ==========
 
     return {
       ok: true,
       data: {
-        aiResponse: enhancedResponse,
-        sessionId: result.sessionId,
-        responseId: result.responseId
+        aiResponse,
+        sessionId: lessonSession.id,
+        responseId: result.studentResponse.id
       }
     };
 
   } catch (error) {
-    console.error('[SOPHIA] Error:', error);
-
-    if (error instanceof Error) {
-      // Manejar errores específicos de OpenAI
-      if (error.message.includes('API')) {
-        return { ok: false, error: 'Error al comunicarse con OpenAI. Verifica tu API key.' };
-      }
-
-      return { ok: false, error: error.message };
-    }
-
-    return { ok: false, error: 'Error desconocido al procesar turno' };
+    console.error('[processSophiaTurn] Error:', error);
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Error al procesar turno con SOPHIA'
+    };
   }
 }
 
 /**
- * Helper: Obtiene el siguiente número de sesión
+ * Server Action para inicializar una sesión de lección
  */
-async function getNextSessionNumber(userId: string, lessonId: string): Promise<number> {
-  const lastSession = await prisma.lessonSession.findFirst({
-    where: { userId, lessonId },
-    orderBy: { sessionNumber: 'desc' }
-  });
+export async function initializeLessonSession(lessonId: string) {
+  const userSession = await auth();
 
-  return (lastSession?.sessionNumber || 0) + 1;
-}
+  if (!userSession?.user?.id) {
+    return { ok: false, error: 'Usuario no autenticado' };
+  }
 
-/**
- * Server Action para iniciar una nueva sesión con SOPHIA
- * Genera la bienvenida y primera pregunta
- */
-export async function initSophiaSession(lessonId: string): Promise<ProcessSophiaTurnResult> {
+  const userId = userSession.user.id;
+  const lessonIdNum = parseInt(lessonId, 10);
+  const lesson = getLessonById(lessonIdNum);
+
+  if (!lesson) {
+    return { ok: false, error: 'Lección no encontrada' };
+  }
+
   try {
-    // Verificar autenticación
-    const userSession = await auth();
-
-    if (!userSession?.user?.id) {
-      return { ok: false, error: 'Usuario no autenticado. Por favor inicia sesión.' };
-    }
-
-    const userId = userSession.user.id;
-
-    // Cargar lección
-    const lesson = getLessonById(parseInt(lessonId));
-    if (!lesson) {
-      return { ok: false, error: 'Lección no encontrada' };
-    }
-
-    // Verificar si ya existe sesión activa
-    const existingSession = await prisma.lessonSession.findFirst({
+    // Buscar sesión existente no completada
+    let session = await prisma.lessonSession.findFirst({
       where: {
         userId,
         lessonId,
@@ -620,121 +401,111 @@ export async function initSophiaSession(lessonId: string): Promise<ProcessSophia
       orderBy: { startedAt: 'desc' }
     });
 
-    if (existingSession) {
-      // Ya existe sesión, usar el flujo normal
-      return {
-        ok: true,
+    // Si no existe, crear nueva
+    if (!session) {
+      const initialTargetMastery: Record<number, number> = {};
+      lesson.targets?.forEach(target => {
+        initialTargetMastery[target.id] = 0.3;
+      });
+
+      const firstTarget = lesson.targets?.[0];
+
+      session = await prisma.lessonSession.create({
         data: {
-          aiResponse: {
-            turnIntent: 'ANSWER' as const,
-            chat: {
-              message: 'Continuemos con la lección donde quedamos.',
-              hints: []
-            },
-            progress: {
-              masteryDelta: 0,
-              nextStep: 'RETRY',
-              tags: ['PARTIAL']
-            }
-          },
-          sessionId: existingSession.id,
-          responseId: '',
+          userId,
+          lessonId,
+          currentMomentId: 0,
+          completedMoments: [],
+          sessionSummary: 'Primera interacción con la lección. Comenzando evaluación inicial.',
+          aggregateMastery: 0.3,
+          currentTargetId: firstTarget?.id,
+          targetMastery: initialTargetMastery as Prisma.InputJsonValue,
+          masteryGlobal: 0.3
         }
+      });
+    }
+
+    return { ok: true, sessionId: session.id };
+  } catch (error) {
+    console.error('[initializeLessonSession] Error:', error);
+    return { ok: false, error: 'Error al inicializar sesión' };
+  }
+}
+
+/**
+ * Inicializa sesión con SOPHIA y genera mensaje de bienvenida
+ * Esta función crea la sesión Y genera el primer mensaje con IA
+ */
+export async function initSophiaSession(lessonId: string): Promise<ProcessSophiaTurnResult> {
+  try {
+    // Primero crear/obtener la sesión
+    const sessionResult = await initializeLessonSession(lessonId);
+
+    if (!sessionResult.ok || !sessionResult.sessionId) {
+      return {
+        ok: false,
+        error: sessionResult.error || 'No se pudo crear la sesión'
       };
     }
 
-    // Obtener el primer target de la lección
+    // Obtener información de la lección
+    const lesson = getLessonById(parseInt(lessonId));
+    if (!lesson) {
+      return { ok: false, error: 'Lección no encontrada' };
+    }
+
+    // Obtener la sesión creada
+    const session = await prisma.lessonSession.findUnique({
+      where: { id: sessionResult.sessionId }
+    });
+
+    if (!session) {
+      return { ok: false, error: 'Sesión no encontrada después de crearla' };
+    }
+
+    // Preparar contexto inicial para SOPHIA
     const firstMoment = lesson.moments?.[0];
     const firstTarget = lesson.targets?.find(t => t.id === firstMoment?.primaryTargetId);
 
-    // Crear nueva sesión con target inicial
-    const sessionNumber = await getNextSessionNumber(userId, lessonId);
-    const newSession = await prisma.lessonSession.create({
+    const promptSlots: PromptSlots = {
+      lessonTitle: lesson.title,
+      momentTitle: firstMoment?.title || 'Introducción',
+      momentGoal: firstMoment?.goal || 'Comenzar la lección',
+      targetInfo: firstTarget ? {
+        id: firstTarget.id,
+        title: firstTarget.title,
+        minMastery: firstTarget.minMastery,
+        currentMastery: 0.3
+      } : undefined,
+      aggregateMastery: 0.3,
+      consecutiveCorrect: 0,
+      attemptsInCurrent: 0,
+      sessionSummary: `Nueva sesión iniciada para la lección "${lesson.title}". Estudiante listo para comenzar.`,
+      questionShown: '',
+      studentAnswer: '[INICIO DE SESIÓN]' // Indicador especial para SOPHIA
+    };
+
+    // Llamar al módulo de IA para generar bienvenida
+    const turnResult = await processTurn(promptSlots);
+    const aiResponse = turnResult.aiResponse;
+
+    // Crear mensaje de bienvenida en la DB
+    const welcomeMessage = await prisma.chatMessage.create({
       data: {
-        userId,
-        lessonId,
-        sessionNumber,
-        currentMomentId: 0,
-        currentTargetId: firstTarget?.id,
-        completedMoments: [],
-        completedTargets: [],
-        targetMastery: {}, // Inicializar vacío
-        aggregateMastery: 0.5,
-        masteryGlobal: 0.0,
-        consecutiveCorrect: 0,
-        attemptsInCurrent: 0,
-        sessionSummary: 'Primera interacción con la lección.',
-        isCompleted: false
-      }
-    });
-
-    // Construir contexto especial para inicio
-    const initialSummary = `Inicio de lección "${lesson.title}". Target: ${firstTarget?.title || 'Sin definir'}. Sin interacciones previas.`;
-
-    const turnContext = buildTurnPayload({
-      lesson,
-      momentId: 0,
-      sessionSummary: initialSummary,
-      questionShown: '', // Sin pregunta previa
-      studentAnswer: '', // Sin respuesta previa
-      aggregateMastery: 0.5,
-      consecutiveCorrect: 0
-    });
-
-    // Llamar a OpenAI para generar bienvenida
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY
-    });
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: SOPHIA_SYSTEM_PROMPT },
-        { role: 'user', content: turnContext }
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'lesson_ai_response',
-          strict: true,
-          schema: LessonAIResponseJSONSchema
-        }
-      } as Parameters<typeof openai.chat.completions.create>[0]['response_format'],
-      temperature: 0.6,
-      max_tokens: 600
-    });
-
-    const responseContent = completion.choices[0]?.message?.content;
-    if (!responseContent) {
-      return { ok: false, error: 'Respuesta vacía de OpenAI' };
-    }
-
-    const jsonResponse = JSON.parse(responseContent);
-    const validationResult = safeValidateAIResponse(jsonResponse);
-
-    if (!validationResult.success) {
-      return { ok: false, error: 'Respuesta de IA no válida' };
-    }
-
-    const aiResponse = validationResult.data;
-
-    // Persistir mensaje inicial de SOPHIA
-    await prisma.chatMessage.create({
-      data: {
-        sessionId: newSession.id,
+        sessionId: session.id,
         role: 'assistant',
         content: aiResponse.chat.message,
         momentId: 0,
-        sequence: 0
+        sequence: 1
       }
     });
 
-    // Actualizar sesión con el summary inicial
+    // Actualizar sesión con el resumen inicial
     await prisma.lessonSession.update({
-      where: { id: newSession.id },
+      where: { id: session.id },
       data: {
-        sessionSummary: `Sesión iniciada. Sophia presentó objetivos de la lección ${lesson.title}.`,
-        lastAccessedAt: new Date()
+        sessionSummary: turnResult.newSummary,
+        lastQuestionShown: aiResponse.chat.message // Guardar el mensaje inicial como pregunta mostrada
       }
     });
 
@@ -742,17 +513,16 @@ export async function initSophiaSession(lessonId: string): Promise<ProcessSophia
       ok: true,
       data: {
         aiResponse,
-        sessionId: newSession.id,
-        responseId: ''
+        sessionId: session.id,
+        responseId: welcomeMessage.id
       }
     };
-
   } catch (error) {
-    console.error('[SOPHIA INIT] Error:', error);
-    if (error instanceof Error) {
-      return { ok: false, error: error.message };
-    }
-    return { ok: false, error: 'Error al iniciar sesión con SOPHIA' };
+    console.error('[initSophiaSession] Error:', error);
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Error al iniciar sesión con SOPHIA'
+    };
   }
 }
 

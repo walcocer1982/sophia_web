@@ -111,6 +111,31 @@ npm run dev
 
 ## Changelog
 
+### Versión 2.0.3 (2025-01-27)
+**Arquitectura mejorada y optimización de SOPHIA**
+
+#### ✨ Nuevas características
+- **SOPHIA Educativa:** La IA ahora brinda conocimiento antes de evaluar nuevos conceptos (máx. 400 caracteres)
+- **Arquitectura Semi-Hexagonal:** Implementada para mejor separación de responsabilidades
+  - `lib/ai/core.ts`: Lógica pura del dominio
+  - `lib/ai/providers.ts`: Adaptadores para diferentes servicios de IA
+  - `lib/ai/index.ts`: Facade público unificado
+
+#### 🐛 Correcciones importantes
+- **Fix crítico:** SOPHIA ahora inicia conversación correctamente en nuevas sesiones
+- **Fix performance:** Eliminado refresco constante del componente AI Debug (solo actualiza con respuestas)
+- **Fix clarificación:** Mejorado manejo cuando estudiantes piden aclaraciones
+
+#### 🚀 Optimizaciones
+- **Reducción 68% del codebase:** Eliminados archivos obsoletos (1.6MB → 644KB)
+- **Limpieza de código:** Removidos console.logs y código no utilizado
+- **System prompt mejorado:** Adaptado para estudiantes recién egresados sin conocimientos previos
+
+#### 📚 Mejoras pedagógicas
+- Regla explícita para brindar conocimiento antes de evaluar
+- Mejor detección de intención del turno (ANSWER/CLARIFY/OFFTOPIC)
+- Feedback más empático para estudiantes principiantes
+
 ### Versión 2.0.1 (2025-01-26)
 **Mejoras de calidad y optimización**
 

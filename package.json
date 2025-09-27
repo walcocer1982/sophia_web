@@ -1,9 +1,10 @@
 {
   "name": "sophia_web",
-  "version": "2.0.1",
+  "version": "2.0.3",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack -p 3001",
+    "cdev": "npx tsx scripts/clean-test-data.ts bruno@enter.edu.pe && next dev --turbopack -p 3001",
     "build": "prisma generate && next build --turbopack",
     "start": "next start",
     "lint": "eslint",
